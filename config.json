@@ -1,0 +1,39 @@
+{
+  "mqtt_broker": "localhost",
+  "mqtt_port": 1883,
+  "matter_server": "ws://localhost:5580/ws",
+  "log_level": "DEBUG",
+  "log_file": "/tmp/bridge.log",
+  "devices": [
+    {
+      "name": "Living Room Light",
+      "node_id": 1,
+      "endpoint_id": 1,
+      "mqtt_topic": "home/living/light",
+      "mqtt_field": "onoff",
+      "matter_cluster": "onoff",
+      "matter_attribute": "OnOff",
+      "transform": "none"
+    },
+    {
+      "name": "Temperature Sensor",
+      "node_id": 2,
+      "endpoint_id": 1,
+      "mqtt_topic": "home/sensor/temp",
+      "mqtt_field": "temp",
+      "matter_cluster": "temperaturemeasurement",
+      "matter_attribute": "MeasuredValue",
+      "transform": "multiply_100"
+    },
+    {
+      "name": "Humidity Sensor",
+      "node_id": 2,
+      "endpoint_id": 2,
+      "mqtt_topic": "home/sensor/humidity",
+      "mqtt_field": "humidity",
+      "matter_cluster": "relativehumiditymeasurement",
+      "matter_attribute": "MeasuredValue",
+      "transform": "multiply_100"
+    }
+  ]
+}
