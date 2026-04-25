@@ -32,15 +32,13 @@ static const char *level_to_str(log_level_t level)
     }
 }
 
-/* ============================================================
- * API Implementation
- * ============================================================ */
+ // API Implementation
 
 int logger_init(const logger_config_t *config)
 {
     if (!config) return -1;
 
-    /* Khởi tạo mutex */
+    // Khởi tạo mutex 
     if (pthread_mutex_init(&g_logger.mutex, NULL) != 0) {
         fprintf(stderr, "[LOGGER] Failed to init mutex\n");
         return -1;
@@ -50,7 +48,7 @@ int logger_init(const logger_config_t *config)
     g_logger.log_to_stdout = config->log_to_stdout;
     g_logger.log_file      = NULL;
 
-    /* Mở file log nếu được cấu hình */
+    // Mở file log nếu được cấu hình
     if (config->log_file[0] != '\0') {
         g_logger.log_file = fopen(config->log_file, "a");
         if (!g_logger.log_file) {
@@ -68,11 +66,11 @@ int logger_init(const logger_config_t *config)
 void logger_log(log_level_t level, const char *module,
                 const char *fmt, ...)
 {
-    /* Chưa init hoặc dưới min_level — bỏ qua ngay */
+    // Chưa init hoặc dưới min_level thì bỏ qua
     if (!g_logger.initialized || level < g_logger.min_level)
         return;
 
-    /* Lấy timestamp có millisecond */
+    // Lấy timestamp tới millisecond 
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
 
@@ -82,24 +80,24 @@ void logger_log(log_level_t level, const char *module,
     char time_buf[32];
     strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &tm_info);
 
-    /* Format message từ varargs */
+    // Format message từ varargs 
     char msg_buf[512];
     va_list args;
     va_start(args, fmt);
     vsnprintf(msg_buf, sizeof(msg_buf), fmt, args);
     va_end(args);
 
-    /* Format dòng log hoàn chỉnh */
+    // Format dòng log hoàn chỉnh 
     char log_buf[640];
     snprintf(log_buf, sizeof(log_buf),
              "[%s.%03ld] [%s] [%-12s] %s\n",
              time_buf,
-             ts.tv_nsec / 1000000,   /* milliseconds */
+             ts.tv_nsec / 1000000,  
              level_to_str(level),
              module ? module : "unknown",
              msg_buf);
 
-    /* Lock — ghi — unlock */
+    // Lock — ghi — unlock
     pthread_mutex_lock(&g_logger.mutex);
 
     if (g_logger.log_to_stdout)
@@ -107,7 +105,7 @@ void logger_log(log_level_t level, const char *module,
 
     if (g_logger.log_file) {
         fputs(log_buf, g_logger.log_file);
-        fflush(g_logger.log_file);  /* Flush ngay để không mất log khi crash */
+        fflush(g_logger.log_file);  
     }
 
     pthread_mutex_unlock(&g_logger.mutex);

@@ -1,0 +1,1 @@
+/usr/bin/cc  -Wall -Wextra -D_POSIX_C_SOURCE=200809L CMakeFiles/test_ring_buffer.dir/tests/test_ring_buffer.c.o CMakeFiles/test_ring_buffer.dir/src/queue/ring_buffer.c.o -o test_ring_buffer 
