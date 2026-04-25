@@ -1,4 +1,5 @@
-#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L 
 
 #include "matter_client.h"
 #include "logger.h"

@@ -19,7 +19,7 @@ typedef struct {
     struct mosquitto *mosq;    // Mosquitto client handle
     message_queue_t  *queue;   // Queue để push message vào
     bridge_config_t  *config;  // Config đọc từ file
-    mqtt_state_t      state;   // Trạng thái kết nối hiện tại
+    volatile int      state;   // Trạng thái kết nối hiện tại
     int               running; // Flag điều khiển vòng lặp chính
 } mqtt_client_t;
 

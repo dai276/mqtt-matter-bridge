@@ -8,14 +8,15 @@
 #include "mapper.h"
 #include "logger.h"
 #include <pthread.h>
+#include <signal.h>
 
 // Metrics đo hiệu năng bridge
 typedef struct {
-    long received;         // Số message nhận từ MQTT
-    long sent;             // Số message gửi thành công lên Matter
-    long dropped;          // Số message bị drop do queue đầy
-    long errors;           // Số lần gửi Matter thất bại
-    long total_latency_ms; // Tổng latency để tính trung bình
+    volatile long received;         // Số message nhận từ MQTT
+    volatile long sent;             // Số message gửi thành công lên Matter
+    volatile long dropped;          // Số message bị drop do queue đầy
+    volatile long errors;           // Số lần gửi Matter thất bại
+    volatile long total_latency_ms; // Tổng latency để tính trung bình
 } bridge_metrics_t;
 
 // Cấu trúc trung tâm của bridge daemon — 4 threads
@@ -25,12 +26,17 @@ typedef struct {
     mqtt_client_t    mqtt;             // MQTT client
     matter_client_t  matter;           // Matter client
     bridge_metrics_t metrics;          // Số liệu hiệu năng
-    int              running;          // Flag điều khiển vòng lặp
+    volatile sig_atomic_t running;    // Flag điều khiển vòng lặp
 
     pthread_t        mqtt_thread;      // Thread 1 — MQTT listener
     pthread_t        matter_thread;    // Thread 2 — Matter WebSocket loop
     pthread_t        dispatch_thread;  // Thread 3 — pop queue + send command
     pthread_t        monitor_thread;   // Thread 4 — health check + metrics
+
+    int              mqtt_thread_created;
+    int              matter_thread_created;
+    int              dispatch_thread_created;
+    int              monitor_thread_created;
 } bridge_t;
 
 // Khởi tạo toàn bộ bridge — đọc config, init tất cả module

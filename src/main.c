@@ -4,15 +4,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <unistd.h>
 
 // Bridge instance global để signal handler truy cập được
 static bridge_t g_bridge;
+static volatile sig_atomic_t g_shutdown = 0;
 
 // Signal handler — gọi bridge_stop() khi nhận SIGTERM hoặc SIGINT
 static void signal_handler(int sig)
 {
-    printf("\nReceived signal %d, shutting down...\n", sig);
-    bridge_stop(&g_bridge);
+    (void)sig;
+    g_shutdown = 1;
+
 }
 
 int main(int argc, char *argv[])
@@ -44,9 +47,13 @@ int main(int argc, char *argv[])
 
     printf("Bridge running — press Ctrl+C to stop\n\n");
 
-    // Chờ signal shutdown — pause() ngủ cho đến khi có signal
-    while (g_bridge.running)
-        pause();
+    // Chờ signal shutdown
+    while (g_bridge.running && !g_shutdown)
+        sleep(1);
+
+    if (g_shutdown)
+        bridge_stop(&g_bridge);
+
 
     // Dọn dẹp và thoát
     bridge_destroy(&g_bridge);

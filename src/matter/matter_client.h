@@ -32,7 +32,7 @@ typedef struct {
     struct lws         *ws;         // WebSocket connection handle
     message_queue_t    *queue;      // Queue pop message từ MQTT
     bridge_config_t    *config;     // Config đọc từ file
-    matter_state_t      state;      // Trạng thái kết nối
+    volatile int        state;      // Trạng thái kết nối
     int                 running;    // Flag vòng lặp chính
     int                 msg_id;     // Counter tạo message_id duy nhất
 

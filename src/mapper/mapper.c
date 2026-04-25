@@ -140,21 +140,16 @@ static const char *json_get_field(cJSON *root, const char *field)
 }
 
 // Xác định command name dựa vào cluster và giá trị
-static void resolve_command(int         cluster_id,
-                             int         value_bool,
-                             char       *cmd_name,
-                             size_t      cmd_size)
+static void resolve_command(int cluster_id, int value_bool,
+                             char *cmd_name, size_t cmd_size)
 {
     if (cluster_id == 0x0006) {
-        // OnOff cluster — dùng command on/off
-        strncpy(cmd_name, value_bool ? "on" : "off", cmd_size);
+        strncpy(cmd_name, value_bool ? "On" : "Off", cmd_size);
     } else {
-        // Các cluster khác — write attribute trực tiếp
         strncpy(cmd_name, "write", cmd_size);
     }
     cmd_name[cmd_size - 1] = '\0';
 }
-
 int mapper_init(bridge_config_t *config)
 {
     if (!config) return -1;

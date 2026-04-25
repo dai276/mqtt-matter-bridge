@@ -16,7 +16,7 @@ static int ws_callback(struct lws              *wsi,
 {
     struct lws_context *ctx    = lws_get_context(wsi);
     matter_client_t    *client = (matter_client_t *)lws_context_user(ctx);
-
+    (void)user;
     switch (reason) {
 
     case LWS_CALLBACK_CLIENT_ESTABLISHED:
@@ -83,6 +83,7 @@ static struct lws_protocols protocols[] = {
         .callback              = ws_callback,
         .per_session_data_size = 0,
         .rx_buffer_size        = 4096,
+        .id                    = 0,
     },
     { NULL, NULL, 0, 0 }
 };

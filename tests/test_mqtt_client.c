@@ -1,10 +1,11 @@
-#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L 
 
 #include "mqtt_client.h"
 #include "message_queue.h"
 #include "config_parser.h"
 #include "logger.h"
-
+#include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>

@@ -7,6 +7,8 @@
 
 #define MODULE           "bridge"
 #define MONITOR_INTERVAL 30
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L 
 
 // Lấy timestamp hiện tại tính bằng millisecond
 static long now_ms(void)
@@ -190,6 +192,7 @@ int bridge_start(bridge_t *bridge)
         LOG_ERR(MODULE, "Failed to create MQTT thread");
         return -1;
     }
+    bridge->mqtt_thread_created = 1;
     LOG_INF(MODULE, "MQTT thread started");
 
     if (pthread_create(&bridge->matter_thread, NULL,
@@ -197,6 +200,7 @@ int bridge_start(bridge_t *bridge)
         LOG_ERR(MODULE, "Failed to create Matter connection thread");
         return -1;
     }
+    bridge->matter_thread_created = 1;
     LOG_INF(MODULE, "Matter connection thread started");
 
     if (pthread_create(&bridge->dispatch_thread, NULL,
@@ -204,6 +208,7 @@ int bridge_start(bridge_t *bridge)
         LOG_ERR(MODULE, "Failed to create Matter dispatch thread");
         return -1;
     }
+    bridge->dispatch_thread_created = 1;
     LOG_INF(MODULE, "Matter dispatch thread started");
 
     if (pthread_create(&bridge->monitor_thread, NULL,
@@ -211,6 +216,7 @@ int bridge_start(bridge_t *bridge)
         LOG_ERR(MODULE, "Failed to create Monitor thread");
         return -1;
     }
+    bridge->monitor_thread_created = 1;
     LOG_INF(MODULE, "Monitor thread started");
 
     LOG_INF(MODULE, "All threads started");
@@ -235,10 +241,14 @@ void bridge_destroy(bridge_t *bridge)
 
     LOG_INF(MODULE, "Waiting for threads to exit...");
 
-    pthread_join(bridge->mqtt_thread,     NULL);
-    pthread_join(bridge->matter_thread,   NULL);
-    pthread_join(bridge->dispatch_thread, NULL);
-    pthread_join(bridge->monitor_thread,  NULL);
+    if (bridge->mqtt_thread_created)
+        pthread_join(bridge->mqtt_thread, NULL);
+    if (bridge->matter_thread_created)
+        pthread_join(bridge->matter_thread, NULL);
+    if (bridge->dispatch_thread_created)
+        pthread_join(bridge->dispatch_thread, NULL);
+    if (bridge->monitor_thread_created)
+        pthread_join(bridge->monitor_thread, NULL);
 
     mapper_destroy();
     matter_client_destroy(&bridge->matter);

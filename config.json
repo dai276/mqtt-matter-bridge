@@ -7,7 +7,7 @@
   "devices": [
     {
       "name": "Living Room Light",
-      "node_id": 1,
+      "node_id": 8,
       "endpoint_id": 1,
       "mqtt_topic": "home/living/light",
       "mqtt_field": "onoff",
@@ -17,7 +17,7 @@
     },
     {
       "name": "Temperature Sensor",
-      "node_id": 2,
+      "node_id": 8,
       "endpoint_id": 1,
       "mqtt_topic": "home/sensor/temp",
       "mqtt_field": "temp",
@@ -27,7 +27,7 @@
     },
     {
       "name": "Humidity Sensor",
-      "node_id": 2,
+      "node_id": 8,
       "endpoint_id": 2,
       "mqtt_topic": "home/sensor/humidity",
       "mqtt_field": "humidity",
