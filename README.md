@@ -1,11 +1,10 @@
+sudo systemctl start mosquitto
+
 # Start Matter Server
 sudo docker start matter-server
-
-# Start Home Assistant
 sudo docker start homeassistant
 
 rm -f /tmp/chip_kvs /tmp/chip_factory.ini /tmp/chip_config.ini /tmp/chip_counters.ini
-
 cd ~/connectedhomeip
 ./out/linux-x64-light/chip-lighting-app \
   --vendor-id 0xFFF1 \
