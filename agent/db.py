@@ -7,7 +7,7 @@ import sqlite3
 import os
 from pathlib import Path
 
-DB_PATH = os.getenv("DB_PATH", str(Path(__file__).parent / "data" / "behavior_agent.db"))
+DB_PATH = os.getenv("DB_PATH", str(Path(__file__).parent.parent / "data" / "behavior_agent.db"))
 
 
 def get_connection() -> sqlite3.Connection:
