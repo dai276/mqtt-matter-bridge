@@ -12,6 +12,7 @@ import json
 import pickle
 import logging
 import argparse
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -35,12 +36,9 @@ PROJECT_ROOT = Path(__file__).parent.parent
 MODEL_PATH   = PROJECT_ROOT / "models" / "decision_tree.pkl"
 META_PATH    = PROJECT_ROOT / "models" / "decision_tree_meta.json"
 
-ENTITIES = ["light.bedroom", "light.living_room", "switch.fan_bedroom"]
-DOMAIN_MAP = {
-    "light.bedroom":      "light",
-    "light.living_room":  "light",
-    "switch.fan_bedroom": "switch",
-}
+DEFAULT_ENTITIES = ["light.bedroom", "light.living_room", "switch.fan_bedroom"]
+ACTIVE_ENTITIES  = list(DEFAULT_ENTITIES)
+
 
 
 # ── Load model ────────────────────────────────────────────────────────────────
@@ -68,7 +66,7 @@ def build_current_features(df, entity_id: str, feat_cols: list[str]) -> list:
     secs  = time_since_last_change(df, entity_id, now)
 
     related = {}
-    for other in ENTITIES:
+    for other in ACTIVE_ENTITIES:
         if other != entity_id:
             key = other.replace(".", "_")
             related[key] = 1 if get_device_state_at(df, other, now) == "on" else 0
@@ -76,7 +74,7 @@ def build_current_features(df, entity_id: str, feat_cols: list[str]) -> list:
     minute_bucket = (now.hour * 60 + now.minute) // 30
 
     fv_dict = {
-        "entity_id_enc":            ENTITIES.index(entity_id),
+        "entity_id_enc":            ACTIVE_ENTITIES.index(entity_id),
         "hour":                     now.hour,
         "minute_bucket":            minute_bucket,
         "weekday":                  now.weekday(),
@@ -97,23 +95,28 @@ def build_current_features(df, entity_id: str, feat_cols: list[str]) -> list:
 # ── Run predictor ─────────────────────────────────────────────────────────────
 
 def run(dry_run: bool = True) -> None:
+    global ACTIVE_ENTITIES
     init_db()
 
-    model, meta  = load_model()
-    feat_cols    = meta["feature_columns"]
-    gate         = PolicyGate()
-    ha           = HAClient(dry_run=dry_run)
-    df           = load_events()
+    model, meta     = load_model()
+    feat_cols       = meta["feature_columns"]
+    entities        = meta.get("entities", DEFAULT_ENTITIES)
+    ACTIVE_ENTITIES = list(entities)
+
+    gate            = PolicyGate()
+    ha              = HAClient(dry_run=dry_run)
+    df              = load_events()
+
 
     if df.empty:
         log.warning("Không có events trong DB — không thể predict.")
         return
 
     now_str = datetime.now().isoformat(timespec="seconds")
-    log.info(f"Predicting for {len(ENTITIES)} entities  dry_run={dry_run}")
+    log.info(f"Predicting for {len(entities)} entities  dry_run={dry_run}")
 
-    for entity_id in ENTITIES:
-        domain = DOMAIN_MAP[entity_id]
+    for entity_id in entities:
+        domain = entity_id.split(".")[0]
 
         # Feature vector hiện tại
         fv = build_current_features(df, entity_id, feat_cols)
@@ -129,10 +132,10 @@ def run(dry_run: bool = True) -> None:
             "recent_toggle_count_2min": fv[feat_cols.index("recent_toggle_count_2min")],
             "recent_toggle_count_5min": fv[feat_cols.index("recent_toggle_count_5min")],
             "time_since_change_s":      fv[feat_cols.index("time_since_change_s")],
+            "prev_state":               fv[feat_cols.index("prev_state")],
         }
 
-        allowed, reason = gate.check(entity_id, domain, confidence, ctx)
-
+        allowed, reason = gate.check(entity_id, domain, "turn_on", confidence, context=ctx)
         log.info(
             f"{entity_id:<25}  conf={confidence:.2f}  "
             f"{'ALLOW' if allowed else 'BLOCK':5}  {reason}"
@@ -164,7 +167,18 @@ if __name__ == "__main__":
                         help="Chỉ log, không gọi HA thật (mặc định)")
     parser.add_argument("--live", action="store_true", default=False,
                         help="Gọi HA REST API thật (cần HA_TOKEN trong .env)")
+    parser.add_argument("--loop", action="store_true",
+                        help="Chạy lặp lại thay vì một lần")
+    parser.add_argument("--interval", type=int, default=300,
+                        help="Giây giữa các lần chạy khi --loop (mặc định 300)")
+
     args = parser.parse_args()
 
     dry = not args.live
-    run(dry_run=dry)
+    if args.loop:
+        while True:
+            run(dry_run=dry)
+            print(f"[predictor] Sleeping {args.interval}s...")
+            time.sleep(args.interval)
+    else:
+        run(dry_run=dry)

@@ -1,3 +1,4 @@
+#define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
 #include "bridge.h"
@@ -7,8 +8,6 @@
 
 #define MODULE           "bridge"
 #define MONITOR_INTERVAL 30
-#define _DEFAULT_SOURCE
-#define _POSIX_C_SOURCE 200809L 
 
 // Lấy timestamp hiện tại tính bằng millisecond
 static long now_ms(void)

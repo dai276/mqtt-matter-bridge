@@ -76,10 +76,10 @@ class HAClient:
             resp = _requests.post(endpoint, json=body,
                                   headers=self._headers(), timeout=TIMEOUT)
             if resp.status_code in (200, 201):
-                log.info(f"OK  {domain}.{service} → {entity_id}")
+                log.error(f"[HA] FAIL {resp.status_code}: {resp.text[:200]}")
                 return True
             else:
-                log.error(f"FAIL {resp.status_code}: {resp.text[:120]}")
+                log.error(f"[HA] FAIL {resp.status_code}: {resp.text[:200]}")
                 return False
         except Exception as e:
             log.error(f"Request error: {e}")

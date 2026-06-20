@@ -4,3 +4,9 @@ build/
 *.so
 chip-tool
 .vscode/
+.venv/
+__pycache__/
+*.pyc
+*.tar.gz
+*.zip
+data/*.db

@@ -4,7 +4,7 @@ policy.py — Policy Gate: kiểm tra trước khi agent điều khiển thiết
 Dùng:
     from agent.policy import PolicyGate
     gate = PolicyGate()
-    allowed, reason = gate.check(entity_id, domain, confidence, context)
+    allowed, reason = gate.check(entity_id, domain, "turn_on", confidence, context)
 """
 
 from dataclasses import dataclass, field
@@ -25,8 +25,8 @@ class PolicyGate:
     allowed_entities:     list[str]   = field(default_factory=lambda: list(ALLOWED_ENTITIES_DEFAULT))
     blocked_domains:      list[str]   = field(default_factory=lambda: list(BLOCKED_DOMAINS_DEFAULT))
 
-    def check(self, entity_id: str, domain: str,
-              confidence: float, context: dict) -> tuple[bool, str]:
+    def check(self, entity_id: str, domain: str, action: str,
+              confidence: float, context: dict | None = None) -> tuple[bool, str]:
         """
         Trả về (allowed, reason).
 
@@ -35,7 +35,13 @@ class PolicyGate:
             recent_toggle_count_2min: int
             recent_toggle_count_5min: int
             time_since_change_s     : float
+            prev_state              : int  0|1
         """
+        if context and context.get("prev_state", 0) == 1:
+            return False, "device already on"
+
+        context = context or {}
+
         if confidence < self.confidence_threshold:
             return False, f"confidence {confidence:.2f} < threshold {self.confidence_threshold}"
 
@@ -64,31 +70,108 @@ class PolicyGate:
 if __name__ == "__main__":
     gate = PolicyGate()
 
-    # Test cases
-    base_ctx = {
-        "presence_home":            1,
-        "recent_toggle_count_2min": 0,
-        "recent_toggle_count_5min": 0,
-        "time_since_change_s":      600,
-    }
-
     cases = [
-        ("light.bedroom",   "light",  0.91, base_ctx,                                        True),
-        ("light.bedroom",   "light",  0.70, base_ctx,                                        False),
-        ("lock.front_door", "lock",   0.95, base_ctx,                                        False),
-        ("light.bedroom",   "light",  0.91, {**base_ctx, "presence_home": 0},                False),
-        ("light.bedroom",   "light",  0.91, {**base_ctx, "recent_toggle_count_2min": 1},     False),
-        ("light.bedroom",   "light",  0.91, {**base_ctx, "time_since_change_s": 100},        False),
+        (
+            "light.bedroom",
+            "light",
+            0.90,
+            {
+                "presence_state": "home",
+                "recent_toggle_count_2min": 0,
+                "time_since_last_action_s": 600,
+                "prev_state": 0,
+            },
+            True,
+        ),
+        (
+            "light.bedroom",
+            "light",
+            0.50,
+            {
+                "presence_state": "home",
+                "recent_toggle_count_2min": 0,
+                "time_since_last_action_s": 600,
+                "prev_state": 0,
+            },
+            False,
+        ),
+        (
+            "lock.front_door",
+            "lock",
+            0.95,
+            {
+                "presence_state": "home",
+                "recent_toggle_count_2min": 0,
+                "time_since_last_action_s": 600,
+                "prev_state": 0,
+            },
+            False,
+        ),
+        (
+            "light.bedroom",
+            "light",
+            0.95,
+            {
+                "presence_state": "away",
+                "recent_toggle_count_2min": 0,
+                "time_since_last_action_s": 600,
+                "prev_state": 0,
+            },
+            False,
+        ),
+        (
+            "light.bedroom",
+            "light",
+            0.95,
+            {
+                "presence_state": "home",
+                "recent_toggle_count_2min": 1,
+                "time_since_last_action_s": 600,
+                "prev_state": 0,
+            },
+            False,
+        ),
+        (
+            "light.bedroom",
+            "light",
+            0.95,
+            {
+                "presence_state": "home",
+                "recent_toggle_count_2min": 0,
+                "time_since_last_action_s": 60,
+                "prev_state": 0,
+            },
+            False,
+        ),
+        (
+            "light.bedroom",
+            "light",
+            0.95,
+            {
+                "presence_state": "home",
+                "recent_toggle_count_2min": 0,
+                "time_since_last_action_s": 600,
+                "prev_state": 1,
+            },
+            False,
+        ),
     ]
 
     print(f"{'Entity':<22} {'Conf':>5}  {'Expect':>6}  {'Got':>6}  Reason")
     print("-" * 75)
+
     all_pass = True
+
     for entity_id, domain, conf, ctx, expected in cases:
-        allowed, reason = gate.check(entity_id, domain, conf, ctx)
+        allowed, reason = gate.check(entity_id, domain, "turn_on", conf, ctx)
         ok = "✅" if allowed == expected else "❌"
+
         if allowed != expected:
             all_pass = False
-        print(f"{entity_id:<22} {conf:>5.2f}  {str(expected):>6}  {str(allowed):>6}  {reason}  {ok}")
+
+        print(
+            f"{entity_id:<22} {conf:>5.2f}  "
+            f"{str(expected):>6}  {str(allowed):>6}  {reason}  {ok}"
+        )
 
     print(f"\n{'Tất cả test pass ✅' if all_pass else 'Có test FAIL ❌'}")

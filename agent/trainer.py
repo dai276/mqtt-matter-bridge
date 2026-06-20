@@ -69,12 +69,12 @@ def train() -> None:
     y_pred = model.predict(X_test)
 
     print("\n=== Classification Report ===")
-    print(classification_report(y_test, y_pred,
+    print(classification_report(y_test, y_pred, labels=[0,1],
                                  target_names=["no_action", "turn_on"],
                                  zero_division=0))
 
     print("=== Confusion Matrix ===")
-    cm = confusion_matrix(y_test, y_pred)
+    cm = confusion_matrix(y_test, y_pred, labels=[0,1])
     print(f"  TN={cm[0,0]}  FP={cm[0,1]}")
     print(f"  FN={cm[1,0]}  TP={cm[1,1]}")
 
