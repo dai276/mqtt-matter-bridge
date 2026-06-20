@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.util
 import json
 import logging
 import os
@@ -23,31 +24,22 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-try:
+if importlib.util.find_spec("dotenv") is not None:
     from dotenv import load_dotenv
-
     load_dotenv(Path(__file__).parent.parent / ".env")
-except ImportError:
-    pass
 
-try:
+if importlib.util.find_spec("websockets") is not None:
     import websockets
-except ImportError:  # pragma: no cover - exercised only when dependency missing
+else:  # pragma: no cover - exercised only when dependency missing
     websockets = None
 
 from agent.db import get_connection, init_db, save_event
+from agent.device_registry import all_entities, domain_for, room_for
 
 LOG = logging.getLogger("collector")
-LOCAL_TZ = ZoneInfo("Asia/Bangkok")
+LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "Asia/Ho_Chi_Minh"))
 BACKOFF_SECONDS = [1, 2, 5, 10, 30]
-DEFAULT_COLLECT_ENTITIES = [
-    "light.bedroom",
-    "light.living_room",
-    "switch.fan_bedroom",
-    "climate.bedroom_ac",
-    "media_player.living_room_tv",
-    "switch.air_purifier",
-]
+DEFAULT_COLLECT_ENTITIES = all_entities()
 EVENT_ROW_FIELDS = {
     "timestamp",
     "entity_id",
@@ -63,6 +55,13 @@ EVENT_ROW_FIELDS = {
     "presence_state",
     "context_user_id",
     "source",
+    "front_door_state",
+    "camera_presence_state",
+    "user_arrival_state",
+    "event_type",
+    "trigger_type",
+    "room",
+    "sim_time",
     "raw_json",
 }
 
@@ -92,7 +91,7 @@ def load_config() -> CollectorConfig:
         collect_entities=collect_entities,
         temperature_entity=os.getenv("TEMPERATURE_ENTITY", "sensor.living_room_temperature"),
         humidity_entity=os.getenv("HUMIDITY_ENTITY", "sensor.living_room_humidity"),
-        presence_entity=os.getenv("PRESENCE_ENTITY", "binary_sensor.home_presence"),
+        presence_entity=os.getenv("PRESENCE_ENTITY", "binary_sensor.living_room_camera_presence"),
     )
 
 
@@ -105,7 +104,7 @@ def build_ws_url(ha_url: str) -> str:
 
 
 def parse_ha_timestamp(value: str | None) -> datetime:
-    """Parse Home Assistant ISO timestamp and convert to Asia/Bangkok."""
+    """Parse Home Assistant ISO timestamp and convert to local timezone."""
     if not value:
         LOG.warning("missing time_fired; using current time")
         return datetime.now().astimezone(LOCAL_TZ)
@@ -121,62 +120,39 @@ def parse_ha_timestamp(value: str | None) -> datetime:
         return datetime.now().astimezone(LOCAL_TZ)
 
 
-def normalize_presence(state: str | None) -> str:
-    """Normalize Home Assistant presence-like states to home/away/unknown."""
-    value = (state or "").strip().lower()
-    if value in {"home", "on", "detected"}:
+def parse_float_safe(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def normalize_presence(value: Any) -> str:
+    if str(value).lower() in ("home", "on", "1"):
         return "home"
-    if value in {"away", "off", "not_home", "clear"}:
+    if str(value).lower() in ("away", "off", "0"):
         return "away"
     return "unknown"
 
 
-def parse_float_safe(value: str | None) -> float | None:
-    """Parse a float state safely, returning None for invalid sensor states."""
-    if value in (None, "", "unknown", "unavailable"):
+def _state_value(state_obj: dict[str, Any] | None) -> str | None:
+    if not state_obj or not isinstance(state_obj, dict):
         return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        LOG.warning("cannot parse numeric sensor state=%r", value)
-        return None
-
-
-def get_events_schema_columns() -> set[str]:
-    """Return actual SQLite columns in the events table."""
-    conn = get_connection()
-    try:
-        rows = conn.execute("PRAGMA table_info(events)").fetchall()
-        return {row["name"] for row in rows}
-    finally:
-        conn.close()
+    state = state_obj.get("state")
+    return str(state) if state is not None else None
 
 
 def filter_row_to_schema(row: dict[str, Any], schema_columns: set[str]) -> dict[str, Any]:
-    """Drop keys not present in the current events schema and warn once per row."""
-    filtered = {key: value for key, value in row.items() if key in schema_columns}
-    dropped = sorted(set(row) - set(filtered))
-    if dropped:
-        LOG.warning("dropping non-schema event columns: %s", ", ".join(dropped))
-    return filtered
-
-
-def _state_value(state_obj: dict[str, Any] | None) -> str | None:
-    if not isinstance(state_obj, dict):
-        return None
-    value = state_obj.get("state")
-    return str(value) if value is not None else None
+    return {k: v for k, v in row.items() if k in schema_columns}
 
 
 def _context_user_id(
-    event: dict[str, Any],
-    new_state_obj: dict[str, Any] | None,
-    old_state_obj: dict[str, Any] | None,
+    event: dict[str, Any], new_state_obj: dict[str, Any] | None, old_state_obj: dict[str, Any] | None
 ) -> str | None:
     candidates = [
-        event.get("context", {}) if isinstance(event.get("context"), dict) else {},
-        new_state_obj.get("context", {}) if isinstance(new_state_obj, dict) else {},
-        old_state_obj.get("context", {}) if isinstance(old_state_obj, dict) else {},
+        event.get("context", {}),
+        new_state_obj.get("context", {}) if new_state_obj else {},
+        old_state_obj.get("context", {}) if old_state_obj else {},
     ]
     for context in candidates:
         user_id = context.get("user_id")
@@ -202,7 +178,8 @@ def build_event_row(
     row = {
         "timestamp": timestamp.isoformat(),
         "entity_id": entity_id,
-        "domain": entity_id.split(".")[0] if isinstance(entity_id, str) and "." in entity_id else None,
+        "domain": domain_for(entity_id) if isinstance(entity_id, str) else None,
+        "room": room_for(entity_id) if isinstance(entity_id, str) else None,
         "old_state": old_state,
         "new_state": new_state,
         "hour": timestamp.hour,
@@ -212,6 +189,12 @@ def build_event_row(
         "temperature": context_cache.get("temperature"),
         "humidity": context_cache.get("humidity"),
         "presence_state": context_cache.get("presence_state", "unknown"),
+        "front_door_state": context_cache.get("front_door_state", "closed"),
+        "camera_presence_state": context_cache.get("camera_presence_state", "off"),
+        "user_arrival_state": context_cache.get("user_arrival_state", "unknown"),
+        "event_type": "state_changed",
+        "trigger_type": "ha_websocket",
+        "sim_time": timestamp.isoformat(),
         "context_user_id": _context_user_id(event, new_state_obj, old_state_obj),
         "source": "ha_websocket",
         "raw_json": json.dumps(event, ensure_ascii=False),
@@ -251,7 +234,10 @@ def handle_state_changed(
         LOG.debug("humidity cache updated: %s", context_cache["humidity"])
     elif entity_id == config.presence_entity:
         context_cache["presence_state"] = normalize_presence(new_state)
+        context_cache["camera_presence_state"] = "on" if context_cache["presence_state"] == "home" else "off"
         LOG.debug("presence cache updated: %s", context_cache["presence_state"])
+    elif entity_id == "binary_sensor.front_door_lock":
+        context_cache["front_door_state"] = str(new_state or "unknown")
 
     if old_state == new_state:
         return False
@@ -303,6 +289,9 @@ async def _run_once_connection(
         "temperature": None,
         "humidity": None,
         "presence_state": "unknown",
+        "front_door_state": "closed",
+        "camera_presence_state": "off",
+        "user_arrival_state": "unknown",
     }
     accepted = 0
 
@@ -325,6 +314,7 @@ async def _run_once_connection(
             message = json.loads(raw)
             if message.get("type") != "event":
                 continue
+            
             if handle_state_changed(
                 message,
                 config,
@@ -333,90 +323,51 @@ async def _run_once_connection(
                 dry_run=dry_run,
             ):
                 accepted += 1
-                if once or (max_events is not None and accepted >= max_events):
-                    return accepted
+                if max_events and accepted >= max_events:
+                    break
+                if once:
+                    break
+                    
     return accepted
 
 
-async def collector_loop(
-    config: CollectorConfig,
-    *,
-    dry_run: bool = True,
-    once: bool = False,
-    max_events: int | None = None,
-) -> None:
-    """Run collector with reconnect/backoff until stopped or enough events arrive."""
-    init_db()
-    schema_columns = get_events_schema_columns()
-    missing_schema = sorted(EVENT_ROW_FIELDS - schema_columns)
-    if missing_schema:
-        message = "events table missing columns: " + ", ".join(missing_schema)
-        if dry_run:
-            LOG.warning("%s; dry-run will omit them", message)
-        else:
-            raise RuntimeError(message)
-
-    total_accepted = 0
-    retry = 0
+async def run_collector(config: CollectorConfig, schema_columns: set[str], *, dry_run: bool, once: bool, max_events: int | None) -> None:
+    retries = 0
     while True:
         try:
-            accepted = await _run_once_connection(
-                config,
-                schema_columns,
-                dry_run=dry_run,
-                once=once,
-                max_events=None if max_events is None else max_events - total_accepted,
-            )
-            total_accepted += accepted
-            if once or (max_events is not None and total_accepted >= max_events):
-                LOG.info("collector stopped after %d accepted event(s)", total_accepted)
-                return
-            retry = 0
-        except KeyboardInterrupt:
-            LOG.info("collector stopped by Ctrl+C")
-            return
+            await _run_once_connection(config, schema_columns, dry_run=dry_run, once=once, max_events=max_events)
+            retries = 0
+            if once or max_events:
+                break
         except Exception as exc:
-            delay = BACKOFF_SECONDS[min(retry, len(BACKOFF_SECONDS) - 1)]
-            retry += 1
-            LOG.error("connection error: %s; retry=%d backoff=%ss", exc, retry, delay)
-            await asyncio.sleep(delay)
+            LOG.error("Collector error: %s", exc)
+            if once:
+                break
+            backoff = BACKOFF_SECONDS[min(retries, len(BACKOFF_SECONDS) - 1)]
+            LOG.info("Reconnecting in %s seconds...", backoff)
+            await asyncio.sleep(backoff)
+            retries += 1
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Home Assistant state_changed data collector")
-    parser.add_argument("--dry-run", action="store_true", default=True,
-                        help="Chỉ log row, không ghi DB (mặc định)")
-    parser.add_argument("--live", action="store_true", default=False,
-                        help="Ghi DB thật")
-    parser.add_argument("--once", action="store_true",
-                        help="Nhận 1 event hợp lệ rồi thoát")
-    parser.add_argument("--max-events", type=int, default=None,
-                        help="Nhận tối đa N event hợp lệ rồi thoát")
-    parser.add_argument("--verbose", action="store_true",
-                        help="Log chi tiết hơn")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    parser = argparse.ArgumentParser(description="Home Assistant state_changed WebSocket collector")
+    parser.add_argument("--dry-run", action="store_true", help="Do not write to database")
+    parser.add_argument("--once", action="store_true", help="Exit after first event or disconnect")
+    parser.add_argument("--max-events", type=int, default=None, help="Exit after N events")
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s [collector] %(message)s",
-        datefmt="%H:%M:%S",
-    )
-
-    if websockets is None:
-        print("Missing dependency. Install with: pip install websockets python-dotenv", file=sys.stderr)
-        raise SystemExit(1)
-
+    init_db()
     config = load_config()
-    dry_run = not args.live
+    
+    conn = get_connection()
+    schema_columns = {row["name"] for row in conn.execute("PRAGMA table_info(events)").fetchall()}
+    conn.close()
+
     try:
-        asyncio.run(collector_loop(
-            config,
-            dry_run=dry_run,
-            once=args.once,
-            max_events=args.max_events,
-        ))
+        asyncio.run(run_collector(config, schema_columns, dry_run=args.dry_run, once=args.once, max_events=args.max_events))
     except KeyboardInterrupt:
-        LOG.info("collector stopped by Ctrl+C")
+        LOG.info("Collector stopped by user.")
 
 
 if __name__ == "__main__":

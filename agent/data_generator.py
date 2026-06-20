@@ -1,412 +1,209 @@
-"""
-data_generator.py — Sinh synthetic data 30 ngày để test pipeline
-Mô phỏng thói quen sử dụng thiết bị thật của người dùng Việt Nam
+"""Generate deterministic 30-day synthetic Phase 1 Behavioral Agent data."""
 
-Kiến trúc sửa lỗi:
-  Phase 1: Sinh candidate actions theo routine + dirty behavior
-  Phase 2: Sort toàn bộ candidate actions theo timestamp rồi replay bằng device_states
-           để old_state/new_state luôn đúng theo dòng thời gian.
+from __future__ import annotations
 
-Chạy:
-  python agent/data_generator.py
-  python agent/data_generator.py --clear   # xóa dữ liệu synthetic cũ trước khi sinh lại
-"""
-
+import argparse
 import json
 import random
 import sys
-import os
-from datetime import datetime, timedelta
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from agent.db import init_db, save_event, get_connection
 
-# ── Config ───────────────────────────────────────────────────────────────────
+from agent.db import get_connection, init_db, save_event
+from agent.device_registry import DEVICES, all_entities, domain_for, get_device, room_for
 
-DAYS = 30
-NOISE_RATE = 0.15             # 15% hành vi ngẫu nhiên
-PRESENCE_AWAY_PROB = 0.10     # 10% xác suất không có ở nhà cả ngày
-DIRTY_BEHAVIOR_PROB = 0.12    # 12% xác suất có thao tác bẩn/ngày
+LOCAL_TZ = timezone(timedelta(hours=7))
 USER_ID = "user_manual"
+DEFAULT_DAYS = 30
 
-# Thiết bị và domain
-ENTITIES: dict[str, str] = {
-    "light.bedroom": "light",
-    "light.living_room": "light",
-    "switch.fan_bedroom": "switch",
+CONTROL_ENTITY_INITIAL_STATES = {
+    "light.bedroom_light": "off",
+    "switch.living_room_ceiling_fan": "off",
+    "climate.living_room_ac": "off",
+    "climate.bedroom_ac": "off",
+    "media_player.living_room_tv": "off",
+    "switch.bathroom_water_heater": "off",
 }
 
-# Trạng thái ban đầu tất cả thiết bị là off
 
-def _initial_states() -> dict[str, str]:
-    return {entity_id: "off" for entity_id in ENTITIES}
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _random_time_between(date: datetime, sh: int, sm: int, eh: int, em: int) -> datetime:
-    """Datetime ngẫu nhiên trong khoảng [start, end] của ngày date."""
-    start = date.replace(hour=sh, minute=sm, second=0, microsecond=0)
-    end = date.replace(hour=eh, minute=em, second=0, microsecond=0)
-
-    # Nếu end <= start, hiểu là khoảng thời gian bắc qua ngày hôm sau.
-    if end <= start:
-        end += timedelta(days=1)
-
-    total = int((end - start).total_seconds())
-    return start + timedelta(seconds=random.randint(0, total))
+def _parse_start_date(value: str | None, days: int) -> datetime:
+    if value:
+        return datetime.fromisoformat(value).replace(tzinfo=LOCAL_TZ, hour=0, minute=0, second=0, microsecond=0)
+    return (datetime.now(LOCAL_TZ) - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def _noisy(prob: float) -> bool:
-    """True nếu hành vi xảy ra, đã tính noise."""
-    if random.random() < NOISE_RATE:
-        return random.random() < 0.5
-    return random.random() < prob
+def _dt(day: datetime, hour: int, minute: int = 0, second: int = 0) -> datetime:
+    return day.replace(hour=hour, minute=minute, second=second, microsecond=0)
 
 
-def _temp(hour: int, is_weekend: bool) -> float:
-    """Nhiệt độ giả lập theo giờ trong ngày."""
-    base = 27.0
-    peak = 33.0 if not is_weekend else 32.0
+def _random_time(day: datetime, start_minute: int, end_minute: int) -> datetime:
+    minute = random.randint(start_minute, end_minute)
+    return _dt(day, minute // 60, minute % 60, random.randint(0, 59))
 
+
+def _base_weather(day: datetime, hour: int, room: str, is_humid_day: bool, is_hot_day: bool) -> tuple[float, float]:
+    peak = 34.0 if is_hot_day else 31.0
+    base = 26.5 if room == "bedroom" else 27.0
     if 6 <= hour <= 14:
         temp = base + (peak - base) * ((hour - 6) / 8)
-    elif 14 < hour <= 20:
-        temp = peak - (peak - base) * ((hour - 14) / 6)
+    elif 14 < hour <= 22:
+        temp = peak - (peak - base + 1.0) * ((hour - 14) / 8)
     else:
-        temp = base - 2 + random.uniform(-1, 1)
-
-    return round(temp + random.uniform(-0.5, 0.5), 1)
-
-
-def _humidity(hour: int) -> float:
-    """Độ ẩm giả lập theo giờ trong ngày."""
-    base = 75.0
-    delta = 10 * abs(hour - 14) / 14
-    return round(base - delta + random.uniform(-3, 3), 1)
+        temp = base - 1.5
+    if room == "bedroom":
+        temp -= 0.4
+    humidity = (84 if is_humid_day else 66) - max(0, hour - 8) * 0.7 + random.uniform(-4, 4)
+    return round(temp + random.uniform(-0.7, 0.7), 1), round(max(45, min(92, humidity)), 1)
 
 
-def make_action(
+def _event(
     ts: datetime,
     entity_id: str,
-    desired_state: str,
-    presence: str,
-    temperature: float | None = None,
-    humidity: float | None = None,
-    *,
-    required_old_state: str | None = None,
-    group_id: str | None = None,
-    depends_on_group: bool = False,
-    reason: str = "routine",
-) -> dict[str, Any]:
-    """
-    Candidate action, chưa phải event thật.
-
-    required_old_state:
-      - Nếu khác None, action chỉ được materialize khi state hiện tại đúng như yêu cầu.
-      - Dùng cho dirty behavior để không tạo event sai logic.
-
-    group_id + depends_on_group:
-      - Nếu action đầu của group bị skip, action sau trong cùng group cũng bị skip.
-      - Ví dụ: tắt nhầm → bật lại. Nếu không thể tạo event tắt nhầm, không tạo event bật lại.
-    """
-    is_weekend = ts.weekday() >= 5
-    return {
-        "timestamp": ts,
-        "entity_id": entity_id,
-        "desired_state": desired_state,
-        "presence": presence,
-        "temperature": temperature if temperature is not None else _temp(ts.hour, is_weekend),
-        "humidity": humidity if humidity is not None else _humidity(ts.hour),
-        "required_old_state": required_old_state,
-        "group_id": group_id,
-        "depends_on_group": depends_on_group,
-        "reason": reason,
-    }
-
-
-def _event_from_action(
-    action: dict[str, Any],
-    old_state: str,
+    old_state: str | None,
     new_state: str,
+    *,
+    event_type: str,
+    trigger_type: str,
+    source: str,
+    context: dict[str, Any],
+    reason: str,
 ) -> dict[str, Any]:
-    """Chuyển candidate action đã được replay thành event thật để lưu DB."""
-    ts: datetime = action["timestamp"]
-    entity_id = action["entity_id"]
-    domain = ENTITIES[entity_id]
-    is_weekend = ts.weekday() >= 5
-
+    device = get_device(entity_id)
     return {
-        "timestamp": ts.strftime("%Y-%m-%dT%H:%M:%S+07:00"),
+        "timestamp": ts.isoformat(),
+        "sim_time": ts.isoformat(),
         "entity_id": entity_id,
-        "domain": domain,
+        "domain": domain_for(entity_id),
+        "room": room_for(entity_id),
         "old_state": old_state,
-        "new_state": new_state,
+        "new_state": str(new_state),
         "hour": ts.hour,
         "minute": ts.minute,
         "weekday": ts.weekday(),
-        "is_weekend": 1 if is_weekend else 0,
-        "temperature": action["temperature"],
-        "humidity": action["humidity"],
-        "presence_state": action["presence"],
-        "context_user_id": USER_ID,
-        "source": "synthetic",
-        "raw_json": json.dumps(
-            {
-                "entity_id": entity_id,
-                "old_state": old_state,
-                "new_state": new_state,
-                "reason": action.get("reason", "synthetic"),
-            },
-            ensure_ascii=False,
-        ),
+        "is_weekend": 1 if ts.weekday() >= 5 else 0,
+        "temperature": context.get("living_room_temperature"),
+        "humidity": context.get("living_room_humidity"),
+        "presence_state": context.get("presence_state", "unknown"),
+        "front_door_state": context.get("front_door_state", "closed"),
+        "camera_presence_state": context.get("camera_presence_state", "off"),
+        "user_arrival_state": context.get("user_arrival_state", "unknown"),
+        "event_type": event_type,
+        "trigger_type": trigger_type,
+        "context_user_id": USER_ID if source == "synthetic" else None,
+        "source": source,
+        "raw_json": json.dumps({"reason": reason, "device": device.device_type if device else None, **context}, ensure_ascii=False),
     }
 
 
-# ── Phase 2: materialize candidate actions theo timestamp ─────────────────────
+def _append_control(events: list[dict[str, Any]], states: dict[str, str], ts: datetime, entity_id: str, desired: str, *, trigger_type: str, context: dict[str, Any], reason: str) -> None:
+    old_state = states.get(entity_id, "off")
+    if old_state == desired:
+        return
+    states[entity_id] = desired
+    events.append(_event(ts, entity_id, old_state, desired, event_type="user_action", trigger_type=trigger_type, source="synthetic", context=context, reason=reason))
 
-def materialize_actions(
-    actions: list[dict[str, Any]],
-    device_states: dict[str, str],
-) -> list[dict[str, Any]]:
-    """
-    Sort candidate actions theo timestamp rồi replay bằng device_states.
-    Đây là chỗ duy nhất được cập nhật state tracker.
-    """
+
+def _daily_context(day: datetime) -> dict[str, Any]:
+    return {
+        "presence_state": "away",
+        "front_door_state": "closed",
+        "camera_presence_state": "off",
+        "user_arrival_state": "away",
+        "bedroom_temperature": 27.0,
+        "bedroom_humidity": 70.0,
+        "living_room_temperature": 27.0,
+        "living_room_humidity": 70.0,
+    }
+
+
+def generate_day(day: datetime, states: dict[str, str]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
-    group_success: dict[str, bool] = {}
+    context = _daily_context(day)
+    is_hot_day = random.random() < 0.62
+    is_humid_day = random.random() < 0.45
+    arrival_minute = random.randint(18 * 60, 19 * 60)
+    arrival_overdue = random.random() < 0.18
+    actual_arrival_minute = arrival_minute + random.randint(25, 55) if arrival_overdue else arrival_minute
+    leave_minute = random.randint(7 * 60, 8 * 60 + 30)
 
-    # Sort stable: nếu cùng timestamp, giữ thứ tự append ban đầu.
-    actions_sorted = sorted(enumerate(actions), key=lambda item: (item[1]["timestamp"], item[0]))
+    # Sensor context snapshots every 3 hours.
+    for hour in range(0, 24, 3):
+        for room in ("bedroom", "living_room"):
+            temp, hum = _base_weather(day, hour, room, is_humid_day, is_hot_day)
+            context[f"{room}_temperature"] = temp
+            context[f"{room}_humidity"] = hum
+            events.append(_event(_dt(day, hour, random.randint(0, 12)), f"sensor.{room}_temperature", None, str(temp), event_type="sensor", trigger_type="environment", source="synthetic", context=context, reason="weather_snapshot"))
+            events.append(_event(_dt(day, hour, random.randint(13, 25)), f"sensor.{room}_humidity", None, str(hum), event_type="sensor", trigger_type="environment", source="synthetic", context=context, reason="humidity_snapshot"))
 
-    for _, action in actions_sorted:
-        entity_id = action["entity_id"]
-        desired_state = action["desired_state"]
-        group_id = action.get("group_id")
+    # Leaving home.
+    leave_ts = _random_time(day, leave_minute, leave_minute + 10)
+    context.update({"presence_state": "away", "front_door_state": "open", "camera_presence_state": "off", "user_arrival_state": "away"})
+    events.append(_event(leave_ts, "binary_sensor.front_door_lock", "closed", "open", event_type="presence", trigger_type="door", source="synthetic", context=context, reason="user_left_home"))
+    events.append(_event(leave_ts + timedelta(minutes=1), "binary_sensor.front_door_lock", "open", "closed", event_type="presence", trigger_type="door", source="synthetic", context=context, reason="door_closed_after_leave"))
 
-        # Nếu action này phụ thuộc group trước đó mà group đã fail, skip.
-        if action.get("depends_on_group") and group_id and not group_success.get(group_id, False):
-            continue
+    # Pre-arrival context can create fan comfort action only when not overdue.
+    pre_ts = _dt(day, arrival_minute // 60, arrival_minute % 60) - timedelta(minutes=random.randint(10, 15))
+    living_temp, living_hum = _base_weather(day, pre_ts.hour, "living_room", is_humid_day, is_hot_day)
+    context.update({"living_room_temperature": living_temp, "living_room_humidity": living_hum, "user_arrival_state": "pre_arrival"})
+    if not arrival_overdue and living_temp >= 30 and living_hum < 78:
+        _append_control(events, states, pre_ts, "switch.living_room_ceiling_fan", "on", trigger_type="pre_arrival_comfort", context=context, reason="hot_before_arrival_fan_preferred")
+    elif arrival_overdue:
+        context["user_arrival_state"] = "arrival_overdue"
+        events.append(_event(pre_ts + timedelta(minutes=30), "binary_sensor.living_room_camera_presence", "off", "off", event_type="context", trigger_type="arrival_overdue", source="synthetic", context=context, reason="arrival_overdue_no_presence"))
 
-        old_state = device_states.get(entity_id, "off")
-        required_old_state = action.get("required_old_state")
+    # Arrival signals.
+    arrival_ts = _dt(day, actual_arrival_minute // 60, actual_arrival_minute % 60, random.randint(0, 59))
+    context.update({"presence_state": "home", "front_door_state": "open", "camera_presence_state": "on", "user_arrival_state": "arrived"})
+    events.append(_event(arrival_ts, "binary_sensor.front_door_lock", "closed", "open", event_type="presence", trigger_type="door", source="synthetic", context=context, reason="user_arrived_home"))
+    events.append(_event(arrival_ts + timedelta(seconds=30), "binary_sensor.living_room_camera_presence", "off", "on", event_type="presence", trigger_type="camera_presence", source="synthetic", context=context, reason="camera_detected_arrival"))
+    events.append(_event(arrival_ts + timedelta(minutes=1), "binary_sensor.front_door_lock", "open", "closed", event_type="presence", trigger_type="door", source="synthetic", context=context, reason="door_closed_after_arrival"))
 
-        if required_old_state is not None and old_state != required_old_state:
-            if group_id:
-                group_success[group_id] = False
-            continue
+    # Evening routines based on context.
+    if living_temp >= 30 and living_hum < 78:
+        _append_control(events, states, arrival_ts + timedelta(minutes=random.randint(1, 8)), "switch.living_room_ceiling_fan", "on", trigger_type="manual_context", context=context, reason="hot_and_not_humid_prefers_fan")
+    if living_temp >= 30 and living_hum >= 78:
+        _append_control(events, states, arrival_ts + timedelta(minutes=random.randint(3, 12)), "climate.living_room_ac", "on", trigger_type="manual_context", context=context, reason="hot_and_humid_prefers_ac_confirm")
+    if living_hum >= 84 and living_temp < 30:
+        _append_control(events, states, arrival_ts + timedelta(minutes=random.randint(5, 15)), "climate.living_room_ac", "on", trigger_type="manual_context", context=context, reason="very_humid_dehumidify_context")
 
-        if old_state == desired_state:
-            if group_id:
-                group_success[group_id] = False
-            continue
+    _append_control(events, states, _random_time(day, 18 * 60 + 30, 20 * 60), "light.bedroom_light", "on", trigger_type="routine", context=context, reason="evening_light")
+    if random.random() < 0.58:
+        _append_control(events, states, _random_time(day, 20 * 60, 22 * 60), "media_player.living_room_tv", "on", trigger_type="routine", context=context, reason="evening_tv_confirm")
+    if random.random() < 0.35:
+        _append_control(events, states, _random_time(day, 21 * 60, 22 * 60), "switch.bathroom_water_heater", "on", trigger_type="routine", context=context, reason="water_heater_confirm_high_risk")
+    if random.random() < 0.35:
+        bedroom_temp, bedroom_hum = _base_weather(day, 22, "bedroom", is_humid_day, is_hot_day)
+        context.update({"bedroom_temperature": bedroom_temp, "bedroom_humidity": bedroom_hum})
+        _append_control(events, states, _random_time(day, 22 * 60, 23 * 60), "climate.bedroom_ac", "on", trigger_type="routine", context=context, reason="bedroom_sleep_comfort_confirm")
 
-        event = _event_from_action(action, old_state, desired_state)
-        events.append(event)
-        device_states[entity_id] = desired_state
+    # Turn things off later.
+    for entity_id in list(CONTROL_ENTITY_INITIAL_STATES):
+        if states.get(entity_id) == "on" and random.random() < 0.82:
+            _append_control(events, states, _random_time(day + timedelta(days=1), 0, 90), entity_id, "off", trigger_type="routine", context=context, reason="night_shutdown")
 
-        if group_id:
-            group_success[group_id] = True
+    # Observe-only washing machine status.
+    if random.random() < 0.22:
+        start = _random_time(day, 9 * 60, 15 * 60)
+        events.append(_event(start, "sensor.kitchen_washing_machine_status", "idle", "running", event_type="sensor", trigger_type="appliance_status", source="synthetic", context=context, reason="washing_machine_started"))
+        events.append(_event(start + timedelta(minutes=random.randint(45, 95)), "sensor.kitchen_washing_machine_status", "running", "done", event_type="sensor", trigger_type="appliance_status", source="synthetic", context=context, reason="washing_machine_done"))
 
+    # Dirty behavior only for controllable devices.
+    if random.random() < 0.18:
+        entity_id = random.choice(["light.bedroom_light", "switch.living_room_ceiling_fan"])
+        ts = _random_time(day, 19 * 60, 22 * 60)
+        first = "off" if states.get(entity_id, "off") == "on" else "on"
+        _append_control(events, states, ts, entity_id, first, trigger_type="dirty_behavior", context=context, reason="accidental_toggle")
+        _append_control(events, states, ts + timedelta(seconds=random.randint(10, 80)), entity_id, "off" if first == "on" else "on", trigger_type="dirty_behavior", context=context, reason="manual_override_after_accident")
+
+    events.sort(key=lambda row: row["timestamp"])
     return events
 
 
-# ── Phase 1: routine actions ──────────────────────────────────────────────────
-
-def simulate_light_bedroom(date: datetime, presence: str) -> list[dict[str, Any]]:
-    """
-    Đèn phòng ngủ:
-    - Weekday: bật 22:00–22:59, tắt 00:00–00:30 ngày hôm sau
-    - Weekend: bật 23:00–23:59, tắt 00:30–01:30 ngày hôm sau
-    """
-    actions: list[dict[str, Any]] = []
-    if presence != "home" or not _noisy(0.90):
-        return actions
-
-    is_weekend = date.weekday() >= 5
-
-    if is_weekend:
-        ts_on = _random_time_between(date, 23, 0, 23, 59)
-        ts_off = _random_time_between(date + timedelta(days=1), 0, 30, 1, 30)
-    else:
-        ts_on = _random_time_between(date, 22, 0, 22, 59)
-        ts_off = _random_time_between(date + timedelta(days=1), 0, 0, 0, 30)
-
-    actions.append(make_action(ts_on, "light.bedroom", "on", presence, reason="routine_bedroom_light_on"))
-
-    if _noisy(0.92):
-        actions.append(make_action(ts_off, "light.bedroom", "off", presence, reason="routine_bedroom_light_off"))
-
-    return actions
-
-
-def simulate_light_living_room(date: datetime, presence: str) -> list[dict[str, Any]]:
-    """
-    Đèn phòng khách:
-    - Weekday: bật 18:00–19:30, tắt 21:00–22:30
-    - Weekend: bật 17:00–18:30, tắt 21:30–23:00
-    """
-    actions: list[dict[str, Any]] = []
-    if presence != "home" or not _noisy(0.85):
-        return actions
-
-    is_weekend = date.weekday() >= 5
-
-    if is_weekend:
-        ts_on = _random_time_between(date, 17, 0, 18, 30)
-        ts_off = _random_time_between(date, 21, 30, 23, 0)
-    else:
-        ts_on = _random_time_between(date, 18, 0, 19, 30)
-        ts_off = _random_time_between(date, 21, 0, 22, 30)
-
-    actions.append(make_action(ts_on, "light.living_room", "on", presence, reason="routine_living_light_on"))
-
-    if _noisy(0.88):
-        actions.append(make_action(ts_off, "light.living_room", "off", presence, reason="routine_living_light_off"))
-
-    return actions
-
-
-def simulate_fan_bedroom(date: datetime, presence: str) -> list[dict[str, Any]]:
-    """
-    Quạt phòng ngủ:
-    - Ban ngày: bật khi temp > 28°C lúc 11h, 13h, 15h; tắt sau 1–3 tiếng
-    - Ban đêm: bật 22h nếu temp > 27°C; tắt sau 1–3 tiếng
-    """
-    actions: list[dict[str, Any]] = []
-    if presence != "home":
-        return actions
-
-    is_weekend = date.weekday() >= 5
-
-    for hour in [11, 13, 15]:
-        temp = _temp(hour, is_weekend)
-        if temp > 28 and _noisy(0.75):
-            ts_on = date.replace(
-                hour=hour,
-                minute=random.randint(0, 59),
-                second=random.randint(0, 59),
-                microsecond=0,
-            )
-            ts_off = ts_on + timedelta(hours=random.randint(1, 3), minutes=random.randint(0, 59))
-
-            actions.append(make_action(ts_on, "switch.fan_bedroom", "on", presence, temp, _humidity(hour), reason="routine_fan_day_on"))
-            actions.append(make_action(ts_off, "switch.fan_bedroom", "off", presence, reason="routine_fan_day_off"))
-
-    night_temp = _temp(22, is_weekend)
-    if night_temp > 27 and _noisy(0.70):
-        ts_on = _random_time_between(date, 22, 0, 22, 59)
-        ts_off = ts_on + timedelta(hours=random.randint(1, 3), minutes=random.randint(0, 59))
-
-        actions.append(make_action(ts_on, "switch.fan_bedroom", "on", presence, night_temp, _humidity(22), reason="routine_fan_night_on"))
-        actions.append(make_action(ts_off, "switch.fan_bedroom", "off", presence, reason="routine_fan_night_off"))
-
-    return actions
-
-
-# ── Phase 1: dirty behavior candidates ────────────────────────────────────────
-
-def simulate_accidental_toggle(date: datetime, presence: str) -> list[dict[str, Any]]:
-    """
-    Lớp 3 — Dirty real-world behavior.
-    Sinh candidate actions có required_old_state/group để khi replay theo timestamp
-    không tạo event sai logic trạng thái.
-    """
-    actions: list[dict[str, Any]] = []
-    if presence != "home" or random.random() > DIRTY_BEHAVIOR_PROB:
-        return actions
-
-    entity_id = random.choice(list(ENTITIES.keys()))
-    ts_base = _random_time_between(date, 19, 0, 22, 59)
-    scenario = random.choice(["accidental_off_then_on", "accidental_on_then_off", "rapid_toggle"])
-    group_id = f"dirty_{scenario}_{date.strftime('%Y%m%d')}_{entity_id}_{random.randint(1000, 9999)}"
-
-    if scenario == "accidental_off_then_on":
-        # Chỉ hợp lệ nếu tại thời điểm replay thiết bị đang on.
-        ts_off = ts_base
-        ts_on = ts_off + timedelta(seconds=random.randint(5, 60))
-        actions.append(
-            make_action(
-                ts_off,
-                entity_id,
-                "off",
-                presence,
-                required_old_state="on",
-                group_id=group_id,
-                reason="dirty_accidental_off_then_on_step1",
-            )
-        )
-        actions.append(
-            make_action(
-                ts_on,
-                entity_id,
-                "on",
-                presence,
-                group_id=group_id,
-                depends_on_group=True,
-                reason="dirty_accidental_off_then_on_step2",
-            )
-        )
-
-    elif scenario == "accidental_on_then_off":
-        # Chỉ hợp lệ nếu tại thời điểm replay thiết bị đang off.
-        ts_on = ts_base
-        ts_off = ts_on + timedelta(seconds=random.randint(5, 60))
-        actions.append(
-            make_action(
-                ts_on,
-                entity_id,
-                "on",
-                presence,
-                required_old_state="off",
-                group_id=group_id,
-                reason="dirty_accidental_on_then_off_step1",
-            )
-        )
-        actions.append(
-            make_action(
-                ts_off,
-                entity_id,
-                "off",
-                presence,
-                group_id=group_id,
-                depends_on_group=True,
-                reason="dirty_accidental_on_then_off_step2",
-            )
-        )
-
-    else:
-        # Rapid toggle: không cần biết state trước. Replay sẽ flip theo trạng thái thực tế.
-        ts = ts_base
-        current_desired = None
-        for i in range(random.randint(2, 3)):
-            # Dùng desired_state xen kẽ. Nếu event đầu bị skip do trùng state,
-            # các event sau vẫn có thể tạo thay đổi thật, giống thao tác do dự ngoài đời.
-            if current_desired is None:
-                current_desired = random.choice(["on", "off"])
-            else:
-                current_desired = "off" if current_desired == "on" else "on"
-
-            actions.append(
-                make_action(
-                    ts,
-                    entity_id,
-                    current_desired,
-                    presence,
-                    reason="dirty_rapid_toggle",
-                )
-            )
-            ts += timedelta(seconds=random.randint(5, 90))
-
-    return actions
-
-
-# ── DB helpers ────────────────────────────────────────────────────────────────
-
 def clear_synthetic_events() -> None:
-    """Xóa dữ liệu synthetic cũ để tránh chạy generator nhiều lần bị duplicate."""
     conn = get_connection()
     with conn:
         conn.execute("DELETE FROM events WHERE source = 'synthetic'")
@@ -415,46 +212,46 @@ def clear_synthetic_events() -> None:
     print("[gen] Cleared old synthetic events and predictions")
 
 
-# ── Main ─────────────────────────────────────────────────────────────────────
-
-def generate(days: int = DAYS, *, clear_old: bool = False) -> int:
+def generate(days: int = DEFAULT_DAYS, *, clear_old: bool = False, seed: int | None = None, start_date: str | None = None) -> dict[str, Any]:
+    if seed is not None:
+        random.seed(seed)
     init_db()
-
     if clear_old:
         clear_synthetic_events()
 
-    total = 0
-    device_states = _initial_states()
-    start = datetime.now() - timedelta(days=days)
+    start = _parse_start_date(start_date, days)
+    states = dict(CONTROL_ENTITY_INITIAL_STATES)
+    all_rows: list[dict[str, Any]] = []
+    for offset in range(days):
+        day = start + timedelta(days=offset)
+        rows = generate_day(day, states)
+        for row in rows:
+            save_event(row)
+        all_rows.extend(rows)
+        print(f"[gen] {day.date()} events={len(rows):3d}")
 
-    for day_offset in range(days):
-        date = (start + timedelta(days=day_offset)).replace(hour=0, minute=0, second=0, microsecond=0)
-        presence = "away" if random.random() < PRESENCE_AWAY_PROB else "home"
-
-        actions: list[dict[str, Any]] = []
-        actions += simulate_light_bedroom(date, presence)
-        actions += simulate_light_living_room(date, presence)
-        actions += simulate_fan_bedroom(date, presence)
-        actions += simulate_accidental_toggle(date, presence)
-
-        day_events = materialize_actions(actions, device_states)
-        day_events.sort(key=lambda event: event["timestamp"])
-
-        for event in day_events:
-            save_event(event)
-
-        total += len(day_events)
-
-        print(
-            f"[gen] {date.strftime('%Y-%m-%d')} "
-            f"({['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][date.weekday()]}) "
-            f"presence={presence:4s}  actions={len(actions):2d}  events={len(day_events):2d}"
-        )
-
-    return total
+    summary = {
+        "events": len(all_rows),
+        "days": days,
+        "entities": len({row["entity_id"] for row in all_rows}),
+        "event_type": Counter(row.get("event_type") for row in all_rows),
+        "source": Counter(row.get("source") for row in all_rows),
+        "room": Counter(row.get("room") for row in all_rows),
+    }
+    print("\n[gen] Summary")
+    print(f"  events: {summary['events']}")
+    print(f"  days: {summary['days']}")
+    print(f"  registry entities: {len(all_entities())}")
+    for key in ("event_type", "source", "room"):
+        print(f"  {key}: {dict(summary[key])}")
+    return summary
 
 
 if __name__ == "__main__":
-    clear_old = "--clear" in sys.argv
-    count = generate(DAYS, clear_old=clear_old)
-    print(f"\n✅ Generated {count} events → {os.getenv('DB_PATH', 'data/behavior_agent.db')}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--clear", action="store_true")
+    parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--start-date", default=None, help="YYYY-MM-DD or ISO datetime")
+    args = parser.parse_args()
+    generate(days=args.days, clear_old=args.clear, seed=args.seed, start_date=args.start_date)
