@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Behavioral Agent Laptop Simulator</title>
+  <link rel="stylesheet" href="style.css?v=3" />
+</head>
+<body>
+  <header>
+    <h1>🏠 Behavioral Agent Simulator</h1>
+    <div id="status">Connecting...</div>
+  </header>
+  <main class="layout">
+    <section class="house-panel">
+      <div class="outdoor" id="outdoorBox">
+        <strong>Outdoor Environment</strong>
+        <span id="outdoorTemp">Outdoor Temp: --°C</span>
+        <span id="outdoorHumidity">Outdoor Humidity: --%</span>
+      </div>
+      <div id="houseMap" class="house-map" tabindex="0">
+        <div class="room bedroom" data-room="bedroom"><h2>Bedroom</h2><div class="nodes" id="bedroomNodes"></div></div>
+        <div class="room living" data-room="living_room"><h2>Living Room</h2><div class="nodes" id="livingRoomNodes"></div></div>
+        <div class="room bathroom" data-room="bathroom"><h2>Bathroom</h2><div class="nodes" id="bathroomNodes"></div></div>
+        <div class="room kitchen" data-room="kitchen"><h2>Kitchen</h2><div class="nodes" id="kitchenNodes"></div></div>
+        <div id="userDot" class="user-dot" title="Use arrow keys to move; Space to toggle nearest device">●</div>
+      </div>
+      <p class="hint">Use arrow keys to move the user dot. Press <b>Space</b> or click/tap a device to toggle the nearest controllable device. Observe-only devices are read-only.</p>
+    </section>
+    <aside class="side-panel">
+      <section class="requests-section">
+        <h2>🤖 Agent Requests</h2>
+        <div id="requestCards" class="cards requests-list"></div>
+      </section>
+      <section class="logs-section">
+        <h2>Logs</h2>
+        <div id="logs" class="logs logs-list"></div>
+      </section>
+    </aside>
+  </main>
+  <footer class="context-panel">
+    <section>
+      <h2>Simulation Context / Thông tin môi trường</h2>
+      <div class="context-grid">
+        <label>Sim time <input id="sim_time" value="2026-06-19T18:30:00+07:00" /></label>
+        <label>Outdoor °C <input id="outdoor_temperature" type="number" value="35" /></label>
+        <label>Outdoor % <input id="outdoor_humidity" type="number" value="80" /></label>
+        <label>Living °C <input id="living_room_temperature" type="number" value="31" /></label>
+        <label>Living % <input id="living_room_humidity" type="number" value="75" /></label>
+        <label>Bedroom °C <input id="bedroom_temperature" type="number" value="29" /></label>
+        <label>Bedroom % <input id="bedroom_humidity" type="number" value="65" /></label>
+        <label>Presence <select id="presence_home"><option value="true">home</option><option value="false">away</option></select></label>
+        <label>Arrival <select id="arrival_status"><option>normal</option><option>pre_arrival</option><option>arrival_overdue</option></select></label>
+        <label>Arrival mins <input id="predicted_arrival_minutes" type="number" placeholder="null" /></label>
+        <label>Late mins <input id="minutes_after_expected_arrival" type="number" value="0" /></label>
+      </div>
+      <div class="buttons">
+        <button id="applyContext">Apply Context</button>
+        <button id="evaluateContext">Evaluate Context</button>
+      </div>
+    </section>
+    <section>
+      <h2>Scenario Buttons</h2>
+      <div class="buttons scenario-buttons">
+        <button data-scenario="pre-arrival-hot-dry">Pre-arrival hot dry</button>
+        <button data-scenario="hot-humid-evening">Hot humid evening</button>
+        <button data-scenario="water-heater-routine">Water heater routine</button>
+        <button data-scenario="tv-evening">TV evening</button>
+        <button data-scenario="arrival-overdue">Arrival overdue</button>
+        <button data-scenario="observe-only">Observe-only</button>
+      </div>
+    </section>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>
