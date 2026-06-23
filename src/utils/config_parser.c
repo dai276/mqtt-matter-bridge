@@ -85,13 +85,19 @@ static int get_int(const cJSON *obj, const char *key,
  * Parse một device object trong mảng "devices" */
 static int parse_device(const cJSON *obj, device_rule_t *rule)
 {
+    memset(rule, 0, sizeof(*rule));
     if (get_string(obj, "name",             rule->name,             sizeof(rule->name),             0) != 0)
         strncpy(rule->name, "unnamed", sizeof(rule->name));
+
+    if (get_string(obj, "type", rule->type, sizeof(rule->type), 0) != 0)
+        rule->type[0] = '\0';
 
     if (get_int(obj, "node_id",     &rule->node_id,     1) != 0) return -1;
     if (get_int(obj, "endpoint_id", &rule->endpoint_id, 1) != 0) return -1;
 
     if (get_string(obj, "mqtt_topic",        rule->mqtt_topic,        sizeof(rule->mqtt_topic),        1) != 0) return -1;
+    if (get_string(obj, "mqtt_command_topic", rule->mqtt_command_topic, sizeof(rule->mqtt_command_topic), 0) != 0)
+        rule->mqtt_command_topic[0] = '\0';
     if (get_string(obj, "mqtt_field",        rule->mqtt_field,        sizeof(rule->mqtt_field),        1) != 0) return -1;
     if (get_string(obj, "matter_cluster",    rule->matter_cluster,    sizeof(rule->matter_cluster),    1) != 0) return -1;
     if (get_string(obj, "matter_attribute",  rule->matter_attribute,  sizeof(rule->matter_attribute),  1) != 0) return -1;
@@ -212,8 +218,12 @@ void config_parser_print(const bridge_config_t *config)
         LOG_DBG(MODULE, "  [%d] %s", i, r->name);
         LOG_DBG(MODULE, "      node_id=%d endpoint_id=%d",
                 r->node_id, r->endpoint_id);
+        LOG_DBG(MODULE, "      type: %s",
+                r->type[0] ? r->type : "(none)");
         LOG_DBG(MODULE, "      mqtt: %s → field: %s",
                 r->mqtt_topic, r->mqtt_field);
+        LOG_DBG(MODULE, "      mqtt command: %s",
+                r->mqtt_command_topic[0] ? r->mqtt_command_topic : "(none)");
         LOG_DBG(MODULE, "      matter: %s / %s  transform: %s",
                 r->matter_cluster, r->matter_attribute, r->transform);
     }

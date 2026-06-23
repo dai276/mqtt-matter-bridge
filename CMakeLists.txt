@@ -3,6 +3,34 @@ project(mqtt-matter-bridge C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -D_POSIX_C_SOURCE=200809L")
+include(CheckIncludeFile)
+check_include_file(mosquitto.h HAVE_MOSQUITTO_H)
+check_include_file(libwebsockets.h HAVE_LIBWEBSOCKETS_H)
+check_include_file(cjson/cJSON.h HAVE_CJSON_H)
+
+set(EXTRA_SOURCES)
+set(EXTRA_LIBS pthread)
+if(HAVE_MOSQUITTO_H)
+    list(APPEND EXTRA_LIBS mosquitto)
+else()
+    list(APPEND EXTRA_SOURCES src/compat/mosquitto_stub.c)
+    include_directories(src/compat)
+    message(WARNING "mosquitto.h not found; building with local compatibility stub")
+endif()
+if(HAVE_LIBWEBSOCKETS_H)
+    list(APPEND EXTRA_LIBS websockets)
+else()
+    list(APPEND EXTRA_SOURCES src/compat/libwebsockets_stub.c)
+    include_directories(src/compat)
+    message(WARNING "libwebsockets.h not found; building with local compatibility stub")
+endif()
+if(HAVE_CJSON_H)
+    list(APPEND EXTRA_LIBS cjson)
+else()
+    list(APPEND EXTRA_SOURCES src/compat/cjson_stub.c)
+    include_directories(src/compat)
+    message(WARNING "cjson/cJSON.h not found; building with local compatibility stub")
+endif()
 
 # Cross-compile cho Pi 3B+ (ARM 32-bit)
 # Dùng: cmake -B build -DCROSS_COMPILE_PI3=ON
@@ -29,6 +57,7 @@ include_directories(
     src/mqtt
     src/matter
     src/mapper
+    src/device
 )
 
 # Source files
@@ -42,11 +71,12 @@ set(SOURCES
     src/mqtt/mqtt_client.c
     src/matter/matter_client.c
     src/mapper/mapper.c
+    src/device/light_device.c
 )
 
 # Build bridge daemon
-add_executable(bridge-daemon ${SOURCES})
-target_link_libraries(bridge-daemon
+add_executable(mqtt_matter_bridge ${SOURCES})
+target_link_libraries(mqtt_matter_bridge
     mosquitto
     websockets
     cjson
@@ -102,9 +132,10 @@ add_executable(test_mqtt_client
     src/queue/ring_buffer.c
     src/utils/logger.c
     src/utils/config_parser.c
+    src/device/light_device.c
 )
 target_include_directories(test_mqtt_client PRIVATE
-    src/mqtt src/queue src/utils)
+    src/mqtt src/queue src/utils src/device)
 target_link_libraries(test_mqtt_client mosquitto cjson pthread)
 
 # Test matter_client

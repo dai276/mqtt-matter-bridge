@@ -4,6 +4,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <stdbool.h>
+#include <cjson/cJSON.h>
 
 #define MODULE        "mqtt_client"
 #define RETRY_DELAY_S 3
@@ -55,7 +57,44 @@ static void on_disconnect(struct mosquitto *mosq, void *userdata, int rc)
     else
         LOG_INF(MODULE, "Disconnected cleanly");
 }
+static void handle_light_state(mqtt_client_t *client,
+                               const char *topic,
+                               const char *payload)
+{
+    if (!client || !topic || !payload || !client->config) return;
 
+    const device_rule_t *rule = NULL;
+    for (int i = 0; i < client->config->device_count; i++) {
+        const device_rule_t *candidate = &client->config->devices[i];
+        if (strcmp(candidate->mqtt_topic, topic) != 0) continue;
+
+        if (strcmp(candidate->type, "onoff_light") == 0 ||
+            strcmp(candidate->matter_cluster, "onoff") == 0) {
+            rule = candidate;
+            break;
+        }
+    }
+
+    if (!rule) return;
+
+    cJSON *root = cJSON_Parse(payload);
+    if (!root) {
+        LOG_WRN(MODULE, "Light payload JSON parse failed: %s", payload);
+        return;
+    }
+
+    cJSON *field = cJSON_GetObjectItemCaseSensitive(root, rule->mqtt_field);
+    if (!cJSON_IsBool(field)) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    bool onoff = cJSON_IsTrue(field);
+    light_state_set(&client->light_state, onoff);
+    LOG_INF(MODULE, "Light state updated: %s", onoff ? "ON" : "OFF");
+
+    cJSON_Delete(root);
+}
 // Callback khi nhận được message từ broker
 // Tạo bridge_message và push vào queue để Matter thread xử lý
 static void on_message(struct mosquitto       *mosq,
@@ -77,6 +116,8 @@ static void on_message(struct mosquitto       *mosq,
     bmsg.payload[sizeof(bmsg.payload) - 1] = '\0';
     bmsg.timestamp_ms = now_ms();
 
+    handle_light_state(client, bmsg.topic, bmsg.payload);
+
     int ret = message_queue_push(client->queue, &bmsg);
     if (ret == QUEUE_FULL)
         LOG_WRN(MODULE, "Queue full, dropped topic=%s", msg->topic);
@@ -96,6 +137,7 @@ int mqtt_client_init(mqtt_client_t   *client,
     client->queue   = queue;
     client->state   = MQTT_DISCONNECTED;
     client->running = 1;
+    light_state_init(&client->light_state);
 
     mosquitto_lib_init();
 
@@ -181,4 +223,36 @@ void mqtt_client_destroy(mqtt_client_t *client)
 mqtt_state_t mqtt_client_state(const mqtt_client_t *client)
 {
     return client ? client->state : MQTT_DISCONNECTED;
+}
+int mqtt_client_publish(mqtt_client_t *client,
+                        const char *topic,
+                        const char *payload,
+                        int qos,
+                        bool retain)
+{
+    if (!client || !topic || !payload) {
+        LOG_ERR(MODULE, "Publish failed: invalid argument");
+        return -1;
+    }
+
+    if (!client->mosq || client->state != MQTT_CONNECTED) {
+        LOG_WRN(MODULE, "Publish skipped, MQTT not connected: topic=%s", topic);
+        return -1;
+    }
+
+    int ret = mosquitto_publish(client->mosq,
+                                NULL,
+                                topic,
+                                (int)strlen(payload),
+                                payload,
+                                qos,
+                                retain);
+    if (ret != MOSQ_ERR_SUCCESS) {
+        LOG_ERR(MODULE, "Publish failed topic=%s payload=%s error=%s",
+                topic, payload, mosquitto_strerror(ret));
+        return -1;
+    }
+
+    LOG_INF(MODULE, "Published topic=%s payload=%s", topic, payload);
+    return 0;
 }

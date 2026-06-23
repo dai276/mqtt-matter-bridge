@@ -5,9 +5,12 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <stdio.h>
 
 #define MODULE           "bridge"
 #define MONITOR_INTERVAL 30
+
+static bridge_t *g_active_bridge = NULL;
 
 // Lấy timestamp hiện tại tính bằng millisecond
 static long now_ms(void)
@@ -178,6 +181,8 @@ int bridge_init(bridge_t *bridge, const char *config_path)
         return -1;
     }
 
+    g_active_bridge = bridge;
+
     LOG_INF(MODULE, "Bridge initialized successfully");
     return 0;
 }
@@ -254,7 +259,46 @@ void bridge_destroy(bridge_t *bridge)
     mqtt_client_destroy(&bridge->mqtt);
     message_queue_destroy(&bridge->queue);
     config_parser_destroy(&bridge->config);
+    if (g_active_bridge == bridge)
+        g_active_bridge = NULL;
 
     LOG_INF(MODULE, "Bridge destroyed cleanly");
     logger_destroy();
+}
+
+int bridge_send_light_command(bool onoff)
+{
+    bridge_t *bridge = g_active_bridge;
+    if (!bridge) {
+        LOG_ERR(MODULE, "No active bridge for light command");
+        return -1;
+    }
+
+    const device_rule_t *rule = NULL;
+    for (int i = 0; i < bridge->config.device_count; i++) {
+        const device_rule_t *candidate = &bridge->config.devices[i];
+        if (strcmp(candidate->type, "onoff_light") == 0 ||
+            strcmp(candidate->matter_cluster, "onoff") == 0) {
+            rule = candidate;
+            break;
+        }
+    }
+
+    if (!rule || rule->mqtt_command_topic[0] == '\0') {
+        LOG_ERR(MODULE, "No on/off light rule with mqtt_command_topic configured");
+        return -1;
+    }
+
+    char payload[32];
+    snprintf(payload, sizeof(payload), "{\"onoff\":%s}", onoff ? "true" : "false");
+
+    int ret = mqtt_client_publish(&bridge->mqtt,
+                                  rule->mqtt_command_topic,
+                                  payload,
+                                  1,
+                                  false);
+    if (ret == 0)
+        LOG_INF(MODULE, "Light command published: %s", onoff ? "ON" : "OFF");
+
+    return ret;
 }

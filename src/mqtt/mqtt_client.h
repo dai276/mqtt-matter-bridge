@@ -5,7 +5,8 @@
 #include "config_parser.h"
 #include "logger.h"
 #include <mosquitto.h>
-
+#include "light_device.h"
+#include <stdbool.h>
 // Trạng thái kết nối MQTT
 typedef enum {
     MQTT_DISCONNECTED = 0,
@@ -20,6 +21,7 @@ typedef struct {
     message_queue_t  *queue;   // Queue để push message vào
     bridge_config_t  *config;  // Config đọc từ file
     volatile int      state;   // Trạng thái kết nối hiện tại
+    light_state_t     light_state; // Trạng thái đèn MQTT mới nhất
     int               running; // Flag điều khiển vòng lặp chính
 } mqtt_client_t;
 
@@ -41,5 +43,12 @@ void mqtt_client_destroy(mqtt_client_t *client);
 
 // Lấy trạng thái kết nối hiện tại
 mqtt_state_t mqtt_client_state(const mqtt_client_t *client);
+
+int mqtt_client_publish(mqtt_client_t *client,
+                        const char *topic,
+                        const char *payload,
+                        int qos,
+                        bool retain);
+
 
 #endif // MQTT_CLIENT_H

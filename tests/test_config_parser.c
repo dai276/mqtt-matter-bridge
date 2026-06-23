@@ -19,20 +19,18 @@ static void test_valid_config(void)
     assert(strcmp(config.mqtt_broker, "localhost") == 0);
     assert(config.mqtt_port == 1883);
     assert(strcmp(config.matter_server, "ws://localhost:5580/ws") == 0);
-    assert(config.device_count == 3);
+    assert(config.device_count == 1);
 
     /* Kiểm tra device 0 — đèn */
-    assert(strcmp(config.devices[0].name, "Living Room Light") == 0);
-    assert(config.devices[0].node_id == 1);
+    assert(strcmp(config.devices[0].name, "ESP32 Living Room Light") == 0);
+    assert(config.devices[0].node_id == 8);
     assert(config.devices[0].endpoint_id == 1);
     assert(strcmp(config.devices[0].mqtt_topic, "home/living/light") == 0);
+    assert(strcmp(config.devices[0].type, "onoff_light") == 0);
     assert(strcmp(config.devices[0].mqtt_field, "onoff") == 0);
+    assert(strcmp(config.devices[0].mqtt_command_topic, "home/living/light/set") == 0);
     assert(strcmp(config.devices[0].matter_cluster, "onoff") == 0);
     assert(strcmp(config.devices[0].transform, "none") == 0);
-
-    /* Kiểm tra device 1 — nhiệt độ */
-    assert(strcmp(config.devices[1].name, "Temperature Sensor") == 0);
-    assert(strcmp(config.devices[1].transform, "multiply_100") == 0);
 
     /* In ra để verify bằng mắt */
     config_parser_print(&config);

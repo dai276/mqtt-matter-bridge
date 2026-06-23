@@ -12,9 +12,11 @@
 //mapping rule
 typedef struct {
     char name[MAX_STR_SHORT];             /* Tên thiết bị — để log      */
+    char type[MAX_STR_SHORT];             /* Loại thiết bị — để log     */
     int  node_id;                         /* MATTER node ID              */
     int  endpoint_id;                     /* MATTER endpoint ID          */
     char mqtt_topic[MAX_STR_MEDIUM];      /* Topic subscribe từ MQTT     */
+    char mqtt_command_topic[MAX_STR_MEDIUM]; /* Topic publish command MQTT */
     char mqtt_field[MAX_STR_SHORT];       /* Field lấy trong JSON payload*/
     char matter_cluster[MAX_STR_SHORT];   /* Tên MATTER cluster          */
     char matter_attribute[MAX_STR_SHORT]; /* Tên MATTER attribute        */

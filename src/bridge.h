@@ -9,6 +9,7 @@
 #include "logger.h"
 #include <pthread.h>
 #include <signal.h>
+#include <stdbool.h>
 
 // Metrics đo hiệu năng bridge
 typedef struct {
@@ -52,5 +53,7 @@ void bridge_stop(bridge_t *bridge);
 
 // Join tất cả thread và giải phóng tài nguyên
 void bridge_destroy(bridge_t *bridge);
+
+int bridge_send_light_command(bool onoff);
 
 #endif // BRIDGE_H
