@@ -1,1 +1,0 @@
-/usr/bin/cc  -Wall -Wextra -D_POSIX_C_SOURCE=200809L CMakeFiles/test_message_queue.dir/tests/test_message_queue.c.o CMakeFiles/test_message_queue.dir/src/queue/message_queue.c.o CMakeFiles/test_message_queue.dir/src/queue/ring_buffer.c.o CMakeFiles/test_message_queue.dir/src/utils/logger.c.o -o test_message_queue  -lpthread 

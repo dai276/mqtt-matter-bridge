@@ -1,0 +1,17 @@
+[Unit]
+Description=Matter MQTT Bridge App
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/mqtt-matter-bridge/matter_bridge_app
+Environment=CHIP_DIR=/home/pi/connectedhomeip
+Environment=RUN_WITH_SUDO=0
+ExecStart=/home/pi/mqtt-matter-bridge/matter_bridge_app/run_bridge_app.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

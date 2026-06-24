@@ -4,6 +4,7 @@
 #include "bridge.h"
 #include <string.h>
 #include <unistd.h>
+#include "matter_backend.h"
 #include <time.h>
 #include <stdio.h>
 
@@ -11,6 +12,15 @@
 #define MONITOR_INTERVAL 30
 
 static bridge_t *g_active_bridge = NULL;
+
+
+static void on_matter_light_command(bool onoff, void *user_data)
+{
+    (void)user_data;
+    LOG_INF(MODULE, "Matter light command received: %s", onoff ? "ON" : "OFF");
+    if (bridge_send_light_command(onoff) != 0)
+        LOG_WRN(MODULE, "Failed to forward Matter light command to MQTT");
+}
 
 // Lấy timestamp hiện tại tính bằng millisecond
 static long now_ms(void)
@@ -109,7 +119,8 @@ static void *monitor_thread_func(void *arg)
     LOG_INF(MODULE, "Monitor thread started");
 
     while (bridge->running) {
-        sleep(MONITOR_INTERVAL);
+        for (int i = 0; i < MONITOR_INTERVAL && bridge->running; i++)
+            sleep(1);
         if (!bridge->running) break;
 
         long avg_latency = 0;
@@ -180,6 +191,8 @@ int bridge_init(bridge_t *bridge, const char *config_path)
         LOG_ERR(MODULE, "Failed to init mapper");
         return -1;
     }
+        for (int i = 0; i < MONITOR_INTERVAL && bridge->running; i++)
+            sleep(1);
 
     g_active_bridge = bridge;
 
@@ -190,7 +203,10 @@ int bridge_init(bridge_t *bridge, const char *config_path)
 int bridge_start(bridge_t *bridge)
 {
     if (!bridge) return -1;
-
+    if (matter_backend_start() != 0) {
+        LOG_ERR(MODULE, "Failed to start Matter backend");
+        return -1;
+    }
     if (pthread_create(&bridge->mqtt_thread, NULL,
                         mqtt_thread_func, bridge) != 0) {
         LOG_ERR(MODULE, "Failed to create MQTT thread");
@@ -236,6 +252,7 @@ void bridge_stop(bridge_t *bridge)
 
     mqtt_client_stop(&bridge->mqtt);
     matter_client_stop(&bridge->matter);
+    matter_backend_stop();
     message_queue_signal_shutdown(&bridge->queue);
 }
 

@@ -1,1 +1,0 @@
-/usr/bin/cc  -Wall -Wextra -D_POSIX_C_SOURCE=200809L CMakeFiles/test_mapper.dir/tests/test_mapper.c.o CMakeFiles/test_mapper.dir/src/mapper/mapper.c.o CMakeFiles/test_mapper.dir/src/utils/logger.c.o CMakeFiles/test_mapper.dir/src/utils/config_parser.c.o CMakeFiles/test_mapper.dir/src/queue/ring_buffer.c.o -o test_mapper  -lcjson -lpthread 

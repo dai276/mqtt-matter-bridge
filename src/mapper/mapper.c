@@ -5,6 +5,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <cjson/cJSON.h>
 
 #define MODULE "mapper"

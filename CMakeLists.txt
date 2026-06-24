@@ -3,6 +3,7 @@ project(mqtt-matter-bridge C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -D_POSIX_C_SOURCE=200809L")
+
 include(CheckIncludeFile)
 check_include_file(mosquitto.h HAVE_MOSQUITTO_H)
 check_include_file(libwebsockets.h HAVE_LIBWEBSOCKETS_H)
@@ -70,18 +71,15 @@ set(SOURCES
     src/queue/message_queue.c
     src/mqtt/mqtt_client.c
     src/matter/matter_client.c
+    src/matter/matter_backend_ws_legacy.c
     src/mapper/mapper.c
     src/device/light_device.c
+    ${EXTRA_SOURCES}
 )
 
 # Build bridge daemon
 add_executable(mqtt_matter_bridge ${SOURCES})
-target_link_libraries(mqtt_matter_bridge
-    mosquitto
-    websockets
-    cjson
-    pthread
-)
+target_link_libraries(mqtt_matter_bridge ${EXTRA_LIBS})
 
 # Build tests
 enable_testing()
@@ -100,11 +98,12 @@ add_executable(test_config_parser
     tests/test_config_parser.c
     src/utils/config_parser.c
     src/utils/logger.c
+    ${EXTRA_SOURCES}
 )
 target_include_directories(test_config_parser PRIVATE src/utils)
-target_link_libraries(test_config_parser cjson pthread)
+target_link_libraries(test_config_parser ${EXTRA_LIBS})
 add_test(NAME test_config_parser COMMAND test_config_parser)
-
+set_tests_properties(test_config_parser PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 # Test ring_buffer
 add_executable(test_ring_buffer
     tests/test_ring_buffer.c
@@ -132,11 +131,13 @@ add_executable(test_mqtt_client
     src/queue/ring_buffer.c
     src/utils/logger.c
     src/utils/config_parser.c
+    src/matter/matter_backend_ws_legacy.c
     src/device/light_device.c
+    ${EXTRA_SOURCES}
 )
 target_include_directories(test_mqtt_client PRIVATE
     src/mqtt src/queue src/utils src/device)
-target_link_libraries(test_mqtt_client mosquitto cjson pthread)
+target_link_libraries(test_mqtt_client ${EXTRA_LIBS})
 
 # Test matter_client
 add_executable(test_matter_client
@@ -146,10 +147,11 @@ add_executable(test_matter_client
     src/queue/ring_buffer.c
     src/utils/logger.c
     src/utils/config_parser.c
+    ${EXTRA_SOURCES}
 )
 target_include_directories(test_matter_client PRIVATE
     src/matter src/queue src/utils)
-target_link_libraries(test_matter_client websockets cjson pthread)
+target_link_libraries(test_matter_client ${EXTRA_LIBS})
 
 # Test mapper
 add_executable(test_mapper
@@ -158,9 +160,11 @@ add_executable(test_mapper
     src/utils/logger.c
     src/utils/config_parser.c
     src/queue/ring_buffer.c
+    ${EXTRA_SOURCES}
 )
 target_include_directories(test_mapper PRIVATE
 
     src/mapper src/utils src/queue)
-target_link_libraries(test_mapper cjson pthread)
+target_link_libraries(test_mapper ${EXTRA_LIBS})
 add_test(NAME test_mapper COMMAND test_mapper)
+set_tests_properties(test_mapper PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

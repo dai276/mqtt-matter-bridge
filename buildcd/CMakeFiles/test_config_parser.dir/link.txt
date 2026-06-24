@@ -1,1 +1,0 @@
-/usr/bin/cc  -Wall -Wextra -D_POSIX_C_SOURCE=200809L CMakeFiles/test_config_parser.dir/tests/test_config_parser.c.o CMakeFiles/test_config_parser.dir/src/utils/config_parser.c.o CMakeFiles/test_config_parser.dir/src/utils/logger.c.o -o test_config_parser  -lcjson -lpthread 

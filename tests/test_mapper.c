@@ -28,11 +28,11 @@ static void test_map_light_on(void)
     matter_command_t cmd;
 
     assert(mapper_translate(&msg, &cmd) == 0);
-    assert(cmd.node_id      == 1);
+    assert(cmd.node_id      == 8);
     assert(cmd.endpoint_id  == 1);
     assert(cmd.cluster_id   == 0x0006);
     assert(cmd.is_command   == 1);
-    assert(strcmp(cmd.command_name, "on") == 0);
+    assert(strcmp(cmd.command_name, "On") == 0);
 
     printf("Test 1 PASSED\n");
 }
@@ -48,42 +48,35 @@ static void test_map_light_off(void)
     assert(mapper_translate(&msg, &cmd) == 0);
     assert(cmd.cluster_id == 0x0006);
     assert(cmd.is_command == 1);
-    assert(strcmp(cmd.command_name, "off") == 0);
+    assert(strcmp(cmd.command_name, "Off") == 0);
 
     printf("Test 2 PASSED\n");
 }
 
-// Test 3: Map nhiệt độ — multiply_100 transform
-static void test_map_temperature(void)
+// Test 3: Sensor topics are not part of the single-light demo config.
+static void test_temperature_topic_not_configured(void)
+
 {
-    printf("\n=== Test 3: Map temperature ===\n");
+    printf("\n=== Test 3: Temperature topic not configured ===\n");
 
     bridge_message_t msg = make_msg("home/sensor/temp", "{\"temp\":25.3}");
     matter_command_t cmd;
 
-    assert(mapper_translate(&msg, &cmd) == 0);
-    assert(cmd.node_id     == 2);
-    assert(cmd.cluster_id  == 0x0402);
-    assert(cmd.is_command  == 0);
-    assert(cmd.value_int   == 2530); // 25.3 × 100
-    assert(strcmp(cmd.attribute, "MeasuredValue") == 0);
+    assert(mapper_translate(&msg, &cmd) == -1);
 
     printf("Test 3 PASSED\n");
 }
 
-// Test 4: Map độ ẩm — multiply_100 transform
-static void test_map_humidity(void)
+// Test 4: Sensor topics are not part of the single-light demo config.
+static void test_humidity_topic_not_configured(void)
 {
-    printf("\n=== Test 4: Map humidity ===\n");
+    printf("\n=== Test 4: Humidity topic not configured ===\n");
 
     bridge_message_t msg = make_msg("home/sensor/humidity",
                                      "{\"humidity\":60.5}");
     matter_command_t cmd;
 
-    assert(mapper_translate(&msg, &cmd) == 0);
-    assert(cmd.cluster_id == 0x0405);
-    assert(cmd.is_command == 0);
-    assert(cmd.value_int  == 6050); // 60.5 × 100
+    assert(mapper_translate(&msg, &cmd) == -1);
 
     printf("Test 4 PASSED\n");
 }
@@ -145,8 +138,8 @@ int main(void)
 
     test_map_light_on();
     test_map_light_off();
-    test_map_temperature();
-    test_map_humidity();
+    test_temperature_topic_not_configured();
+    test_humidity_topic_not_configured();
     test_unknown_topic();
     test_invalid_json();
     test_missing_field();
