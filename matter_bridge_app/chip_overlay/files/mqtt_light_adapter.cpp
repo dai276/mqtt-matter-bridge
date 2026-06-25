@@ -11,8 +11,10 @@ constexpr const char * kLogModule = "MqttLightAdapter";
 MqttLightAdapter::MqttLightAdapter(const std::string& host,
                                    int port,
                                    const std::string& command_topic,
-                                   const std::string& state_topic)
-    : host_(host), port_(port), command_topic_(command_topic), state_topic_(state_topic)
+                                   const std::string& state_topic,
+                                   const std::string& availability_topic)
+    : host_(host), port_(port), command_topic_(command_topic), state_topic_(state_topic),
+      availability_topic_(availability_topic)
 {
 }
 
@@ -48,7 +50,7 @@ bool MqttLightAdapter::Start()
     started_ = true;
     ChipLogProgress(AppServer, "%s: connected to %s:%d", kLogModule, host_.c_str(), port_);
 
-    if (!SubscribeStateTopic()) {
+    if (!SubscribeTopics()) {
         Stop();
         return false;
     }
@@ -78,7 +80,7 @@ void MqttLightAdapter::Stop()
     }
 }
 
-bool MqttLightAdapter::SubscribeStateTopic()
+bool MqttLightAdapter::SubscribeTopics()
 {
     if (!started_ || mosq_ == nullptr) {
         ChipLogError(AppServer, "%s: subscribe requested before MQTT adapter started", kLogModule);
@@ -86,13 +88,22 @@ bool MqttLightAdapter::SubscribeStateTopic()
     }
 
     constexpr int qos = 1;
-    const int rc = mosquitto_subscribe(mosq_, nullptr, state_topic_.c_str(), qos);
+    int rc = mosquitto_subscribe(mosq_, nullptr, state_topic_.c_str(), qos);
     if (rc != MOSQ_ERR_SUCCESS) {
         ChipLogError(AppServer, "%s: MQTT subscribe failed for %s: %s", kLogModule, state_topic_.c_str(), mosquitto_strerror(rc));
         return false;
     }
 
     ChipLogProgress(AppServer, "%s: subscribed to %s", kLogModule, state_topic_.c_str());
+
+    rc = mosquitto_subscribe(mosq_, nullptr, availability_topic_.c_str(), qos);
+    if (rc != MOSQ_ERR_SUCCESS) {
+        ChipLogError(AppServer, "%s: MQTT subscribe failed for %s: %s", kLogModule, availability_topic_.c_str(),
+                     mosquitto_strerror(rc));
+        return false;
+    }
+
+    ChipLogProgress(AppServer, "%s: subscribed to %s", kLogModule, availability_topic_.c_str());
     return true;
 }
 
@@ -124,6 +135,11 @@ void MqttLightAdapter::SetStateCallback(StateCallback cb)
     state_cb_ = std::move(cb);
 }
 
+void MqttLightAdapter::SetAvailabilityCallback(AvailabilityCallback cb)
+{
+    availability_cb_ = std::move(cb);
+}
+
 void MqttLightAdapter::OnMessage(struct mosquitto* mosq, void* userdata, const struct mosquitto_message* msg)
 {
     (void) mosq;
@@ -140,11 +156,27 @@ void MqttLightAdapter::HandleMessage(const struct mosquitto_message* msg)
         return;
     }
 
+    std::string payload(static_cast<const char*>(msg->payload), static_cast<size_t>(msg->payloadlen));
+
+    if (availability_topic_ == msg->topic) {
+        bool online = false;
+        if (!ParseAvailabilityPayload(payload.c_str(), &online)) {
+            ChipLogError(AppServer, "%s: invalid availability payload on %s: %s", kLogModule, availability_topic_.c_str(),
+                         payload.c_str());
+            return;
+        }
+
+        ChipLogProgress(AppServer, "MQTT availability received: %s", online ? "online" : "offline");
+        if (availability_cb_) {
+            availability_cb_(online);
+        }
+        return;
+    }
+
     if (state_topic_ != msg->topic) {
         return;
     }
 
-    std::string payload(static_cast<const char*>(msg->payload), static_cast<size_t>(msg->payloadlen));
     bool onoff = false;
     if (!ParseOnOffPayload(payload.c_str(), &onoff)) {
         ChipLogError(AppServer, "%s: invalid state payload on %s: %s", kLogModule, state_topic_.c_str(), payload.c_str());
@@ -172,6 +204,25 @@ bool MqttLightAdapter::ParseOnOffPayload(const char* payload, bool* onoff) const
     if (std::strstr(payload, "\"onoff\":false") != nullptr ||
         std::strstr(payload, "\"onoff\" : false") != nullptr) {
         *onoff = false;
+        return true;
+    }
+
+    return false;
+}
+
+bool MqttLightAdapter::ParseAvailabilityPayload(const char* payload, bool* online) const
+{
+    if (payload == nullptr || online == nullptr) {
+        return false;
+    }
+
+    if (std::strcmp(payload, "online") == 0) {
+        *online = true;
+        return true;
+    }
+
+    if (std::strcmp(payload, "offline") == 0) {
+        *online = false;
         return true;
     }
 

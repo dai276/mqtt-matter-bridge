@@ -7,11 +7,13 @@
 class MqttLightAdapter {
 public:
     using StateCallback = std::function<void(bool onoff)>;
+    using AvailabilityCallback = std::function<void(bool online)>;
 
     MqttLightAdapter(const std::string& host,
                      int port,
                      const std::string& command_topic,
-                     const std::string& state_topic);
+                     const std::string& state_topic,
+                     const std::string& availability_topic);
     ~MqttLightAdapter();
 
     bool Start();
@@ -19,18 +21,22 @@ public:
 
     bool PublishCommand(bool onoff);
     void SetStateCallback(StateCallback cb);
-    bool SubscribeStateTopic();
+    void SetAvailabilityCallback(AvailabilityCallback cb);
+    bool SubscribeTopics();
 
 private:
     static void OnMessage(struct mosquitto* mosq, void* userdata, const struct mosquitto_message* msg);
     void HandleMessage(const struct mosquitto_message* msg);
     bool ParseOnOffPayload(const char* payload, bool* onoff) const;
+    bool ParseAvailabilityPayload(const char* payload, bool* online) const;
 
     std::string host_;
     int port_;
     std::string command_topic_;
     std::string state_topic_;
+    std::string availability_topic_;
     bool started_ = false;
     mosquitto* mosq_ = nullptr;
     StateCallback state_cb_;
+    AvailabilityCallback availability_cb_;
 };
